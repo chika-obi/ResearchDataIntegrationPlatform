@@ -1,0 +1,6 @@
+{
+  "name": "RDIP - Research Data Integration Platform",
+  "description": "Enterprise-grade research data integration, survey authoring, offline field enumerator tracking, automated statistical analysis, cross-tabulation, and academic reporting platform.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
