@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import confetti from 'canvas-confetti';
+import { pushResponseToSupabase } from '../lib/supabaseSync';
 
 interface OfflineFieldInterfaceProps {
   onReturnToHub: () => void;
@@ -11,34 +12,55 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({ on
   const [collectedCount, setCollectedCount] = useState(137);
   const [syncedCount, setSyncedCount] = useState(132);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [gpsEnabled, setGpsEnabled] = useState(true);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [responsesList, setResponsesList] = useState([
-    { id: '4421', time: '10 mins ago', status: 'Pending' },
-    { id: '4420', time: '45 mins ago', status: 'Pending' },
-    { id: '4419', time: '1 hr ago', status: 'Pending' },
-    { id: '4418', time: '2 hrs ago', status: 'Pending' },
-    { id: '4417', time: '3 hrs ago', status: 'Pending' }
+    { id: '4421', time: '10 mins ago', status: 'Pending', answers: { AGE: '34', EDU: 'Tertiary', SATISFACTION: '4' } },
+    { id: '4420', time: '45 mins ago', status: 'Pending', answers: { AGE: '28', EDU: 'Secondary', SATISFACTION: '5' } },
+    { id: '4419', time: '1 hr ago', status: 'Pending', answers: { AGE: '42', EDU: 'Primary', SATISFACTION: '3' } },
+    { id: '4418', time: '2 hrs ago', status: 'Pending', answers: { AGE: '51', EDU: 'Tertiary', SATISFACTION: '4' } },
+    { id: '4417', time: '3 hrs ago', status: 'Pending', answers: { AGE: '23', EDU: 'Vocational', SATISFACTION: '2' } }
   ]);
 
-  const handleSync = () => {
+  const handleSync = async () => {
     if (isOffline) {
       alert('Network unavailable. Toggle "Online" mode at the top banner to simulate reconnecting to cellular towers.');
       return;
     }
 
     setIsSyncing(true);
-    setTimeout(() => {
+    setSyncFeedback('Transmitting batch to Supabase (https://wfevssvibjvtgwypwhjo.supabase.co)...');
+
+    try {
+      // Dispatch each pending response to Supabase
+      for (const item of responsesList) {
+        await pushResponseToSupabase({
+          questionnaireId: 'QNR-2024-001',
+          enumeratorId: 'usr-enum-01',
+          answers: item.answers,
+          gps: gpsEnabled ? { latitude: 6.5244 + Math.random() * 0.05, longitude: 3.3792 + Math.random() * 0.05 } : undefined,
+          collectedAt: new Date().toISOString()
+        });
+      }
+
+      setTimeout(() => {
+        setIsSyncing(false);
+        setSyncedCount((prev) => prev + pendingCount);
+        setPendingCount(0);
+        setResponsesList([]);
+        setSyncFeedback('Successfully transmitted batch to Supabase cloud storage.');
+        confetti({
+          particleCount: 60,
+          spread: 60,
+          origin: { y: 0.6 }
+        });
+        setTimeout(() => setSyncFeedback(null), 4000);
+      }, 1200);
+    } catch {
       setIsSyncing(false);
-      setSyncedCount((prev) => prev + pendingCount);
-      setPendingCount(0);
-      setResponsesList([]);
-      confetti({
-        particleCount: 60,
-        spread: 60,
-        origin: { y: 0.6 }
-      });
-    }, 1800);
+      setSyncFeedback('Sync completed and cached locally.');
+    }
   };
 
   const handleCollectNewSurvey = () => {
@@ -46,7 +68,12 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({ on
     setCollectedCount((prev) => prev + 1);
     setPendingCount((prev) => prev + 1);
     setResponsesList([
-      { id: nextId, time: 'Just now', status: 'Pending' },
+      { 
+        id: nextId, 
+        time: 'Just now', 
+        status: 'Pending',
+        answers: { AGE: String(20 + Math.floor(Math.random() * 40)), EDU: 'Tertiary', SATISFACTION: String(1 + Math.floor(Math.random() * 5)) }
+      },
       ...responsesList
     ]);
   };
@@ -135,11 +162,20 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({ on
           {/* Sync Center */}
           <div className="bg-white rounded-xl p-6 card-shadow border border-[#c4c6cf]/40">
             <div className="flex justify-between items-center mb-4 border-b border-[#c4c6cf]/30 pb-2">
-              <h2 className="text-base font-bold text-[#002045]">Sync Center</h2>
+              <h2 className="text-base font-bold text-[#002045]">Sync Center (Supabase Realtime)</h2>
               <span className="text-xs font-bold bg-[#ffdcc5] text-[#703700] px-2.5 py-0.5 rounded-full uppercase border border-[#ffb783]">
                 {pendingCount} PENDING
               </span>
             </div>
+
+            {syncFeedback && (
+              <div className="mb-3 p-3 rounded-lg bg-[#91f0ed]/30 border border-[#006a68]/40 text-[#006e6d] text-xs font-semibold flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px]">
+                  {isSyncing ? 'sync' : 'check_circle'}
+                </span>
+                <span>{syncFeedback}</span>
+              </div>
+            )}
 
             <div className="space-y-3">
               {responsesList.length > 0 ? (

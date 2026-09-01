@@ -27,7 +27,22 @@ export default function App() {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [showPublicSurveyModal, setShowPublicSurveyModal] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState<UserProfile>(MOCK_USER_PROFILE);
+  const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
+    const saved = localStorage.getItem('rdip_user_profile');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return MOCK_USER_PROFILE;
+      }
+    }
+    return MOCK_USER_PROFILE;
+  });
+
+  const handleUpdateUser = (updatedUser: UserProfile) => {
+    setCurrentUser(updatedUser);
+    localStorage.setItem('rdip_user_profile', JSON.stringify(updatedUser));
+  };
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
   const [selectedProject, setSelectedProject] = useState<Project | null>(INITIAL_PROJECTS[0]);
 

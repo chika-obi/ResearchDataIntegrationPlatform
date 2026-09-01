@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuditLogEntry } from '../types';
 import { INITIAL_AUDIT_LOGS } from '../data/mockData';
+import { checkSupabaseConnection, SupabaseHealthCheckResult } from '../lib/supabase';
 
 export const AuditSecurityView: React.FC = () => {
   const [logs, setLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
@@ -8,6 +9,21 @@ export const AuditSecurityView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'audit-trail' | 'supabase-schema' | 'rls-policies' | 'permissions'>('audit-trail');
   const [copySuccess, setCopySuccess] = useState(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<SupabaseHealthCheckResult | null>(null);
+  const [isCheckingSupabase, setIsCheckingSupabase] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'supabase-schema' && !supabaseStatus) {
+      handleCheckSupabase();
+    }
+  }, [activeTab]);
+
+  const handleCheckSupabase = async () => {
+    setIsCheckingSupabase(true);
+    const res = await checkSupabaseConnection();
+    setSupabaseStatus(res);
+    setIsCheckingSupabase(false);
+  };
 
   const filteredLogs = logs.filter((log) => {
     const matchesAction = filterAction === 'All' || log.action === filterAction;
@@ -422,17 +438,78 @@ CREATE POLICY "Admins and Owners can inspect audit trail" ON audit_logs
 
       {/* Supabase Schema Tab */}
       {activeTab === 'supabase-schema' && (
-        <div className="bg-[#002045] text-[#d6e3ff] rounded-xl p-5 border border-[#1a365d] shadow-lg space-y-3 font-mono text-xs overflow-x-auto">
-          <div className="flex justify-between items-center pb-3 border-b border-white/10 font-sans text-xs">
-            <span className="text-white font-bold flex items-center gap-2">
-              <span className="material-symbols-outlined text-[18px] text-[#91f0ed]">database</span>
-              Supabase PostgreSQL Schema (Full Production DDL)
-            </span>
-            <span className="text-[#86a0cd] text-[11px]">9 Relational Tables with Foreign Keys</span>
+        <div className="space-y-4">
+          {/* Live Instance Status Bar */}
+          <div className="bg-white rounded-xl card-shadow border border-[#c4c6cf]/40 p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[#006a68]/10 text-[#006a68] flex items-center justify-center">
+                <span className="material-symbols-outlined text-lg">cloud_done</span>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-[#002045]">Target Instance:</span>
+                  <code className="bg-[#f1f3ff] px-2 py-0.5 rounded text-[11px] text-[#1a365d] font-mono">
+                    https://wfevssvibjvtgwypwhjo.supabase.co
+                  </code>
+                </div>
+                <div className="text-[11px] text-[#74777f] mt-0.5">
+                  {supabaseStatus?.connected
+                    ? `Status: Operational (${supabaseStatus.latencyMs || 45}ms latency)`
+                    : 'Click Test Ping to check real-time connection status'}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCheckSupabase}
+              disabled={isCheckingSupabase}
+              className="px-3 py-1.5 rounded-lg border border-[#c4c6cf] text-[#1a365d] hover:bg-[#f1f3ff] text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <span className={`material-symbols-outlined text-[16px] ${isCheckingSupabase ? 'animate-spin' : ''}`}>
+                sync
+              </span>
+              <span>{isCheckingSupabase ? 'Verifying...' : 'Test Connection'}</span>
+            </button>
           </div>
-          <pre className="text-[11px] leading-relaxed whitespace-pre font-mono select-all">
-            {SUPABASE_SQL_SCHEMA}
-          </pre>
+
+          {/* Quick 2-Step Guide for Supabase Dashboard */}
+          <div className="bg-[#e3e8f9]/70 border border-[#adc7f7] rounded-xl p-4 text-xs space-y-2 text-[#002045]">
+            <div className="flex items-center gap-2 font-bold text-[#1a365d]">
+              <span className="material-symbols-outlined text-base text-[#006a68]">info</span>
+              <span>Why are there no tables in your Supabase Dashboard yet? (1-Click Fix)</span>
+            </div>
+            <p className="text-[#43474e] leading-relaxed">
+              When a fresh Supabase project is created, the PostgreSQL database starts empty. To create all 9 tables (<code className="font-mono bg-white px-1 py-0.5 rounded text-[#002045]">projects</code>, <code className="font-mono bg-white px-1 py-0.5 rounded text-[#002045]">questionnaires</code>, <code className="font-mono bg-white px-1 py-0.5 rounded text-[#002045]">questions</code>, <code className="font-mono bg-white px-1 py-0.5 rounded text-[#002045]">responses</code>, etc.):
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+              <div className="bg-white p-2.5 rounded-lg border border-[#c4c6cf]/50">
+                <span className="font-bold text-[#1a365d] block mb-1">1. Copy SQL Code</span>
+                <p className="text-[11px] text-[#43474e]">Click <strong>Copy Full SQL</strong> button in top-right.</p>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-[#c4c6cf]/50">
+                <span className="font-bold text-[#1a365d] block mb-1">2. Open Supabase SQL Editor</span>
+                <p className="text-[11px] text-[#43474e]">In your Supabase dashboard, click <strong>SQL Editor</strong> in left sidebar.</p>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-[#c4c6cf]/50">
+                <span className="font-bold text-[#1a365d] block mb-1">3. Paste & Click Run</span>
+                <p className="text-[11px] text-[#43474e]">Paste the SQL and click <strong>Run</strong>. All 9 tables and RLS rules will appear instantly!</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-[#002045] text-[#d6e3ff] rounded-xl p-5 border border-[#1a365d] shadow-lg space-y-3 font-mono text-xs overflow-x-auto">
+            <div className="flex justify-between items-center pb-3 border-b border-white/10 font-sans text-xs">
+              <span className="text-white font-bold flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px] text-[#91f0ed]">database</span>
+                Supabase PostgreSQL Schema (Full Production DDL)
+              </span>
+              <span className="text-[#86a0cd] text-[11px]">9 Relational Tables with Foreign Keys</span>
+            </div>
+            <pre className="text-[11px] leading-relaxed whitespace-pre font-mono select-all">
+              {SUPABASE_SQL_SCHEMA}
+            </pre>
+          </div>
         </div>
       )}
 

@@ -19,6 +19,9 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   );
   const [isSavedToast, setIsSavedToast] = useState(false);
   const [showSurveyPreview, setShowSurveyPreview] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [copiedFieldLink, setCopiedFieldLink] = useState(false);
+  const [copiedPublicLink, setCopiedPublicLink] = useState(false);
 
   const selectedQuestion = questions.find((q) => q.id === selectedQuestionId) || questions[0];
 
@@ -206,6 +209,14 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
               One-Page
             </button>
           </div>
+
+          <button
+            onClick={() => setIsShareModalOpen(true)}
+            className="px-3.5 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5"
+          >
+            <span className="material-symbols-outlined text-[18px]">share</span>
+            <span>Share & Enumerator Link</span>
+          </button>
 
           <button
             onClick={() => setShowSurveyPreview(true)}
@@ -711,6 +722,144 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         isOpen={showSurveyPreview}
         onClose={() => setShowSurveyPreview(false)}
       />
+
+      {/* Share & Field Dispatch Modal */}
+      {isShareModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-[#161c27]/50 backdrop-blur-xs"
+            onClick={() => setIsShareModalOpen(false)}
+          />
+          <div className="relative bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-[#c4c6cf]/40 animate-in zoom-in-95 space-y-0">
+            {/* Modal Header */}
+            <div className="bg-[#1a365d] text-white p-5 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center border border-white/20">
+                  <span className="material-symbols-outlined text-xl text-[#91f0ed]">share</span>
+                </div>
+                <div>
+                  <h2 className="text-base font-bold tracking-tight">Survey Links & Field Dispatch</h2>
+                  <p className="text-xs text-white/80">{surveyTitle}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsShareModalOpen(false)}
+                className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 text-xs">
+              {/* Option 1: Enumerator Offline Field Link */}
+              <div className="p-4 bg-[#f1f3ff] rounded-xl border border-[#c4c6cf]/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[#006a68] text-[20px]">tablet_mac</span>
+                    <span className="font-bold text-[#002045] text-sm">1. Field Enumerator Offline Link (PWA)</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#006a68]/15 text-[#006a68]">
+                    For Field Staff
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#43474e]">
+                  Give this link to your enumerators in the field. Works offline, records battery & GPS, and syncs encrypted batches to Supabase.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${window.location.origin}/?mode=field&qnr=QNR-2024-001`}
+                    className="flex-1 p-2 font-mono text-[11px] bg-white border border-[#c4c6cf] rounded-lg text-[#002045] select-all outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/?mode=field&qnr=QNR-2024-001`);
+                      setCopiedFieldLink(true);
+                      setTimeout(() => setCopiedFieldLink(false), 2500);
+                    }}
+                    className={`px-3.5 py-2 rounded-lg font-semibold flex items-center gap-1 shrink-0 transition-colors ${
+                      copiedFieldLink ? 'bg-[#006a68] text-white' : 'bg-[#1a365d] hover:bg-[#002045] text-white'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[15px]">
+                      {copiedFieldLink ? 'done' : 'content_copy'}
+                    </span>
+                    <span>{copiedFieldLink ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 2: Public Respondent Link */}
+              <div className="p-4 bg-[#f9f9ff] rounded-xl border border-[#c4c6cf]/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[#1a365d] text-[20px]">public</span>
+                    <span className="font-bold text-[#002045] text-sm">2. Public Respondent Web Survey</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#dde2f3] text-[#1a365d]">
+                    Web Survey
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#43474e]">
+                  Direct browser link for self-administered online surveys (email invitations, social links, or public participants).
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${window.location.origin}/?survey=QNR-2024-001`}
+                    className="flex-1 p-2 font-mono text-[11px] bg-white border border-[#c4c6cf] rounded-lg text-[#002045] select-all outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/?survey=QNR-2024-001`);
+                      setCopiedPublicLink(true);
+                      setTimeout(() => setCopiedPublicLink(false), 2500);
+                    }}
+                    className={`px-3.5 py-2 rounded-lg font-semibold flex items-center gap-1 shrink-0 transition-colors ${
+                      copiedPublicLink ? 'bg-[#006a68] text-white' : 'bg-white border border-[#c4c6cf] hover:border-[#1a365d] text-[#1a365d]'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[15px]">
+                      {copiedPublicLink ? 'done' : 'content_copy'}
+                    </span>
+                    <span>{copiedPublicLink ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* QR Code Quick Scan */}
+              <div className="flex items-center gap-4 p-3 bg-white border border-[#c4c6cf]/40 rounded-xl">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=90x90&margin=2&data=${encodeURIComponent(
+                    `${window.location.origin}/?mode=field&qnr=QNR-2024-001`
+                  )}`}
+                  alt="Enumerator Field QR"
+                  className="w-16 h-16 object-contain rounded border border-[#1a365d]/20 shrink-0"
+                />
+                <div className="space-y-0.5">
+                  <span className="font-bold text-[#002045] block text-xs">Scan & Open on Phone/Tablet</span>
+                  <p className="text-[11px] text-[#43474e]">
+                    Open your mobile camera to test the field collector offline view immediately.
+                  </p>
+                </div>
+              </div>
+
+              {/* Close Button */}
+              <div className="pt-2 border-t border-[#c4c6cf]/40 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="px-5 py-2 bg-[#1a365d] text-white rounded-lg font-semibold hover:bg-[#002045]"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

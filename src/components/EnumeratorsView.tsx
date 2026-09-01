@@ -11,8 +11,10 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEnumerator, setSelectedEnumerator] = useState<Enumerator>(INITIAL_ENUMERATORS[1]); // Default to Marcus Webb
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [messageToast, setMessageToast] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   // New Assign Form State
   const [newName, setNewName] = useState('');
@@ -94,6 +96,14 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
         </div>
 
         <div className="flex flex-wrap gap-2.5 w-full md:w-auto">
+          <button
+            onClick={() => setIsLinkModalOpen(true)}
+            className="px-4 py-2.5 rounded-lg text-xs font-semibold bg-[#1a365d]/10 text-[#1a365d] border border-[#1a365d]/30 hover:bg-[#1a365d]/20 transition-colors flex items-center gap-1.5"
+          >
+            <span className="material-symbols-outlined text-[16px]">qr_code_2</span>
+            <span>Get Enumerator Link & QR</span>
+          </button>
+
           <button
             onClick={onOpenOfflineCollector}
             className="px-4 py-2.5 rounded-lg text-xs font-semibold bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 transition-colors flex items-center gap-1.5"
@@ -278,30 +288,40 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
           </div>
 
           {/* Actions */}
-          <div className="pt-4 border-t border-[#c4c6cf]/40 grid grid-cols-2 gap-3">
+          <div className="pt-4 border-t border-[#c4c6cf]/40 space-y-2.5">
             <button
-              onClick={handleSendMessage}
-              className="bg-transparent border border-[#c4c6cf] text-[#002045] hover:bg-[#f1f3ff] text-xs font-semibold py-2.5 rounded-lg transition-colors text-center"
+              onClick={() => setIsLinkModalOpen(true)}
+              className="w-full bg-[#e3e8f9] hover:bg-[#d6e3ff] text-[#002045] text-xs font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-[#adc7f7]"
             >
-              Message
+              <span className="material-symbols-outlined text-sm text-[#1a365d]">qr_code_2</span>
+              <span>Get {selectedEnumerator.name}'s Link & QR</span>
             </button>
-            <button
-              onClick={() => handleForceSync(selectedEnumerator.id)}
-              disabled={syncingId === selectedEnumerator.id}
-              className="bg-[#1a365d] hover:bg-[#002045] text-white text-xs font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm"
-            >
-              {syncingId === selectedEnumerator.id ? (
-                <>
-                  <span className="material-symbols-outlined text-sm animate-spin">sync</span>
-                  <span>Syncing...</span>
-                </>
-              ) : (
-                <>
-                  <span className="material-symbols-outlined text-sm">sync</span>
-                  <span>Force Sync</span>
-                </>
-              )}
-            </button>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleSendMessage}
+                className="bg-transparent border border-[#c4c6cf] text-[#002045] hover:bg-[#f1f3ff] text-xs font-semibold py-2.5 rounded-lg transition-colors text-center"
+              >
+                SMS Prompt
+              </button>
+              <button
+                onClick={() => handleForceSync(selectedEnumerator.id)}
+                disabled={syncingId === selectedEnumerator.id}
+                className="bg-[#1a365d] hover:bg-[#002045] text-white text-xs font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                {syncingId === selectedEnumerator.id ? (
+                  <>
+                    <span className="material-symbols-outlined text-sm animate-spin">sync</span>
+                    <span>Syncing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">sync</span>
+                    <span>Force Sync</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -387,6 +407,136 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Enumerator Field Link & QR Modal */}
+      {isLinkModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-[#161c27]/50 backdrop-blur-xs"
+            onClick={() => setIsLinkModalOpen(false)}
+          />
+          <div className="relative bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-[#c4c6cf]/40 animate-in zoom-in-95 space-y-0">
+            {/* Modal Header */}
+            <div className="bg-[#1a365d] text-white p-5 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center border border-white/20">
+                  <span className="material-symbols-outlined text-xl text-[#91f0ed]">qr_code_scanner</span>
+                </div>
+                <div>
+                  <h2 className="text-base font-bold tracking-tight">Enumerator Field Dispatch Link</h2>
+                  <p className="text-xs text-white/80">Direct offline PWA collector URL & QR Code</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsLinkModalOpen(false)}
+                className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 text-xs">
+              {/* Target Enumerator Info */}
+              <div className="p-3.5 bg-[#f1f3ff] rounded-xl border border-[#c4c6cf]/40 flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-[#002045] text-sm block">{selectedEnumerator.name}</span>
+                  <span className="text-[#43474e] text-xs">
+                    Enumerator ID: <code className="font-mono bg-white px-1 py-0.5 rounded border border-[#c4c6cf]/40 text-[#002045]">{selectedEnumerator.id}</code> • {selectedEnumerator.region}
+                  </span>
+                </div>
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 uppercase">
+                  Active Field Agent
+                </span>
+              </div>
+
+              {/* QR Code & Scan Option */}
+              <div className="flex flex-col sm:flex-row items-center gap-5 p-4 bg-[#f9f9ff] rounded-xl border border-[#c4c6cf]/40">
+                <div className="bg-white p-2.5 rounded-xl border-2 border-[#1a365d] shadow-sm shrink-0 flex items-center justify-center">
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&margin=4&data=${encodeURIComponent(
+                      `${window.location.origin}/?mode=field&enum=${selectedEnumerator.id}&token=AUTH_${selectedEnumerator.id}`
+                    )}`}
+                    alt="Enumerator QR Code"
+                    className="w-32 h-32 object-contain rounded-lg"
+                  />
+                </div>
+                <div className="space-y-1.5 text-center sm:text-left">
+                  <h4 className="font-bold text-[#002045] text-sm flex items-center justify-center sm:justify-start gap-1.5">
+                    <span className="material-symbols-outlined text-[18px] text-[#006a68]">smartphone</span>
+                    <span>Scan with Tablet / Phone</span>
+                  </h4>
+                  <p className="text-[#43474e] text-xs leading-relaxed">
+                    Point the enumerator device camera at this QR code to instantly open the <strong>Offline PWA Field Collector</strong> configured for {selectedEnumerator.name}.
+                  </p>
+                  <p className="text-[11px] text-[#74777f]">
+                    Works with zero internet once loaded; caches surveys directly in browser memory.
+                  </p>
+                </div>
+              </div>
+
+              {/* Copyable Web URL Link */}
+              <div className="space-y-1.5">
+                <label className="block font-bold text-[#002045] uppercase tracking-wider text-[11px]">
+                  Shareable Field Access URL
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={`${window.location.origin}/?mode=field&enum=${selectedEnumerator.id}&token=AUTH_${selectedEnumerator.id}`}
+                    className="flex-1 p-2.5 font-mono text-[11px] bg-white border border-[#c4c6cf] rounded-lg text-[#002045] select-all outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(
+                        `${window.location.origin}/?mode=field&enum=${selectedEnumerator.id}&token=AUTH_${selectedEnumerator.id}`
+                      );
+                      setCopiedLink(true);
+                      setTimeout(() => setCopiedLink(false), 2500);
+                    }}
+                    className={`px-4 py-2.5 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 transition-colors shadow-2xs ${
+                      copiedLink
+                        ? 'bg-[#006a68] text-white'
+                        : 'bg-[#1a365d] hover:bg-[#002045] text-white'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[16px]">
+                      {copiedLink ? 'done' : 'content_copy'}
+                    </span>
+                    <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-3 border-t border-[#c4c6cf]/40 flex flex-col sm:flex-row justify-between items-center gap-3">
+                <span className="text-[11px] text-[#74777f]">
+                  No app download needed • Runs as Progressive Web App
+                </span>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => setIsLinkModalOpen(false)}
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-lg border border-[#c4c6cf] font-semibold text-[#43474e] hover:bg-slate-50"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLinkModalOpen(false);
+                      onOpenOfflineCollector();
+                    }}
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-[#006a68] text-white font-semibold hover:bg-[#004f4e] flex items-center justify-center gap-1.5 shadow-xs"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                    <span>Launch Field App Now</span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
