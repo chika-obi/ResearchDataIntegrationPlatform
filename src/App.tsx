@@ -87,6 +87,11 @@ export default function App() {
         onToggleAuthModal={() => setIsAuthModalOpen(true)}
         isOfflineMode={isOfflineMode}
         currentUser={currentUser}
+        projects={projects}
+        onSelectProject={(p) => {
+          setSelectedProject(p);
+          handleNavigate('projects');
+        }}
       />
 
       {/* Main Body Layout */}

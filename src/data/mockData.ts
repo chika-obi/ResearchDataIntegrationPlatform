@@ -400,7 +400,24 @@ export const INITIAL_ENUMERATORS: Enumerator[] = [
     batteryLevel: 94,
     phone: '+234 802 345 6789',
     completionRate: 98.4,
-    assignedProjectIds: ['PRJ-001', 'PRJ-003']
+    assignedProjectIds: ['PRJ-001', 'PRJ-003'],
+    coordinates: {
+      latitude: 10.5105,
+      longitude: 7.4165,
+      accuracy: 3.8,
+      altitude: 615,
+      speed: 1.4,
+      heading: 120,
+      timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
+      address: 'Kaduna North Health Sector, Independence Way',
+      lga: 'Kaduna North',
+      state: 'Kaduna'
+    },
+    locationHistory: [
+      { latitude: 10.5080, longitude: 7.4120, timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(), address: 'Tafawa Balewa Clinic' },
+      { latitude: 10.5092, longitude: 7.4145, timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(), address: 'Yakubu Gowon Way PHC' },
+      { latitude: 10.5105, longitude: 7.4165, timestamp: new Date(Date.now() - 1000 * 60 * 10).toISOString(), address: 'Kaduna North Health Sector' }
+    ]
   },
   {
     id: 'EN-1045',
@@ -414,7 +431,24 @@ export const INITIAL_ENUMERATORS: Enumerator[] = [
     batteryLevel: 42,
     phone: '+234 803 456 7890',
     completionRate: 91.2,
-    assignedProjectIds: ['PRJ-001']
+    assignedProjectIds: ['PRJ-001'],
+    coordinates: {
+      latitude: 6.4584,
+      longitude: 7.5464,
+      accuracy: 12.4,
+      altitude: 230,
+      speed: 0.0,
+      heading: 45,
+      timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      address: 'Enugu North Rural Buffer, Ogui Road Sector',
+      lga: 'Enugu North',
+      state: 'Enugu'
+    },
+    locationHistory: [
+      { latitude: 6.4420, longitude: 7.5310, timestamp: new Date(Date.now() - 1000 * 60 * 180).toISOString(), address: 'Independence Layout' },
+      { latitude: 6.4510, longitude: 7.5410, timestamp: new Date(Date.now() - 1000 * 60 * 150).toISOString(), address: 'Ogui Urban Post' },
+      { latitude: 6.4584, longitude: 7.5464, timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(), address: 'Ogui Road Sector' }
+    ]
   },
   {
     id: 'EN-1048',
@@ -428,7 +462,24 @@ export const INITIAL_ENUMERATORS: Enumerator[] = [
     batteryLevel: 88,
     phone: '+234 805 567 8901',
     completionRate: 99.1,
-    assignedProjectIds: ['PRJ-001', 'PRJ-002']
+    assignedProjectIds: ['PRJ-001', 'PRJ-002'],
+    coordinates: {
+      latitude: 4.8156,
+      longitude: 7.0498,
+      accuracy: 4.1,
+      altitude: 18,
+      speed: 2.1,
+      heading: 275,
+      timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+      address: 'Old GRA Coastal Health Catchment, Port Harcourt',
+      lga: 'Port Harcourt',
+      state: 'Rivers'
+    },
+    locationHistory: [
+      { latitude: 4.8020, longitude: 7.0380, timestamp: new Date(Date.now() - 1000 * 60 * 90).toISOString(), address: 'Town Wharf Center' },
+      { latitude: 4.8090, longitude: 7.0440, timestamp: new Date(Date.now() - 1000 * 60 * 50).toISOString(), address: 'Aba Road Corridor' },
+      { latitude: 4.8156, longitude: 7.0498, timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(), address: 'Old GRA Coastal Health' }
+    ]
   },
   {
     id: 'EN-1051',
@@ -442,7 +493,23 @@ export const INITIAL_ENUMERATORS: Enumerator[] = [
     batteryLevel: 19,
     phone: '+234 807 678 9012',
     completionRate: 84.6,
-    assignedProjectIds: ['PRJ-001', 'PRJ-004']
+    assignedProjectIds: ['PRJ-001', 'PRJ-004'],
+    coordinates: {
+      latitude: 7.3775,
+      longitude: 3.9470,
+      accuracy: 24.5,
+      altitude: 210,
+      speed: 0.0,
+      heading: 0,
+      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+      address: 'Bodija Market Cluster Zone 2, Ibadan',
+      lga: 'Ibadan North',
+      state: 'Oyo'
+    },
+    locationHistory: [
+      { latitude: 7.3710, longitude: 3.9350, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(), address: 'Secretariat Road' },
+      { latitude: 7.3775, longitude: 3.9470, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(), address: 'Bodija Market Cluster' }
+    ]
   },
   {
     id: 'EN-1058',
@@ -456,7 +523,24 @@ export const INITIAL_ENUMERATORS: Enumerator[] = [
     batteryLevel: 91,
     phone: '+234 809 789 0123',
     completionRate: 97.8,
-    assignedProjectIds: ['PRJ-001', 'PRJ-002', 'PRJ-003']
+    assignedProjectIds: ['PRJ-001', 'PRJ-002', 'PRJ-003'],
+    coordinates: {
+      latitude: 9.0765,
+      longitude: 7.3986,
+      accuracy: 2.9,
+      altitude: 540,
+      speed: 1.8,
+      heading: 190,
+      timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
+      address: 'Garki District Medical Corridor, Area 11',
+      lga: 'Abuja Municipal Area Council',
+      state: 'FCT Abuja'
+    },
+    locationHistory: [
+      { latitude: 9.0620, longitude: 7.3850, timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(), address: 'Wuse Zone 4 Center' },
+      { latitude: 9.0710, longitude: 7.3920, timestamp: new Date(Date.now() - 1000 * 60 * 20).toISOString(), address: 'Central Area Secretariat' },
+      { latitude: 9.0765, longitude: 7.3986, timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(), address: 'Garki District Medical' }
+    ]
   }
 ];
 

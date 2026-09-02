@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import confetti from 'canvas-confetti';
 import { Question } from '../types';
 import { evaluateQuestionLogic } from '../lib/surveyLogicEvaluator';
+import { saveResponseToLocalDb } from '../lib/supabaseSync';
 
 interface PublicSurveyModalProps {
   isOpen: boolean;
@@ -96,9 +97,30 @@ export const PublicSurveyModal: React.FC<PublicSurveyModalProps> = ({
   const handleNext = () => {
     // Check if current question triggers a direct skip or end_survey action
     const currentEval = evaluateQuestionLogic(currentQ?.logicRule, answers);
-    if (currentEval.action === 'end_survey') {
+    const finishSurvey = () => {
       setIsSubmitted(true);
+      const newRecordId = `PUB-${Date.now().toString().slice(-5)}`;
+      const payload = {
+        id: newRecordId,
+        questionnaireId: 'QNR-2024-PUBLIC',
+        projectId: 'PRJ-001',
+        enumeratorId: 'SELF-ADMINISTERED',
+        enumeratorName: 'Web Respondent',
+        respondentId: `RESP-${Math.floor(1000 + Math.random() * 9000)}`,
+        answers: answers,
+        gps: { latitude: 6.5244, longitude: 3.3792, accuracy: 5.0 },
+        batteryLevel: 100,
+        collectedAt: new Date().toISOString()
+      };
+      saveResponseToLocalDb(payload);
+      try {
+        window.dispatchEvent(new CustomEvent('rdip_response_synced', { detail: payload }));
+      } catch {}
       confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+    };
+
+    if (currentEval.action === 'end_survey') {
+      finishSurvey();
       return;
     }
 
@@ -114,12 +136,7 @@ export const PublicSurveyModal: React.FC<PublicSurveyModalProps> = ({
     if (nextIdx !== -1) {
       setCurrentStepIndex(nextIdx);
     } else {
-      setIsSubmitted(true);
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
+      finishSurvey();
     }
   };
 

@@ -171,6 +171,11 @@ export const OfflineSurveyCollectorModal: React.FC<OfflineSurveyCollectorModalPr
       await pushResponseToSupabase(payload);
     }
 
+    // Broadcast background sync event across the application
+    try {
+      window.dispatchEvent(new CustomEvent('rdip_response_synced', { detail: payload }));
+    } catch {}
+
     if (onResponseCollected) {
       onResponseCollected(payload);
     }

@@ -125,6 +125,34 @@ export interface Question {
   };
 }
 
+export interface LogicDefinitionItem {
+  questionId: string;
+  questionNumber?: string;
+  variableName: string;
+  questionTitle?: string;
+  logicRule: QuestionLogicRule;
+}
+
+export interface SurveyLogicFlowExport {
+  schemaType: 'rdip_questionnaire_logic_flow';
+  formatVersion: '1.0';
+  exportDate: string;
+  surveyTitle?: string;
+  surveyVersion?: string;
+  description?: string;
+  rulesCount: number;
+  logicDefinitions: LogicDefinitionItem[];
+}
+
+export interface LogicImportResult {
+  success: boolean;
+  matchedCount: number;
+  unmatchedVariables: string[];
+  totalImportedRules: number;
+  warnings?: string[];
+  error?: string;
+}
+
 export interface VariableDictionaryItem {
   id: string;
   variableName: string;
@@ -135,6 +163,20 @@ export interface VariableDictionaryItem {
   linkedObjective: string;
   missingValueCode: string;
   questionId: string;
+}
+
+export interface EnumeratorLocationRecord {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  altitude?: number;
+  speed?: number; // km/h
+  heading?: number; // degrees
+  timestamp: string;
+  address?: string;
+  lga?: string;
+  state?: string;
+  isSimulated?: boolean;
 }
 
 export interface Enumerator {
@@ -150,6 +192,8 @@ export interface Enumerator {
   phone: string;
   assignedProjectIds?: string[];
   completionRate?: number;
+  coordinates?: EnumeratorLocationRecord;
+  locationHistory?: EnumeratorLocationRecord[];
 }
 
 export interface QualityIssue {

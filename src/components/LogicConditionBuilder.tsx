@@ -13,12 +13,14 @@ interface LogicConditionBuilderProps {
   currentQuestion: Question;
   allQuestions: Question[];
   onUpdateLogic: (updatedLogic: QuestionLogicRule) => void;
+  onOpenLogicManager?: () => void;
 }
 
 export const LogicConditionBuilder: React.FC<LogicConditionBuilderProps> = ({
   currentQuestion,
   allQuestions,
-  onUpdateLogic
+  onUpdateLogic,
+  onOpenLogicManager
 }) => {
   const currentLogic: QuestionLogicRule = currentQuestion.logicRule || {
     enabled: false,
@@ -651,6 +653,21 @@ export const LogicConditionBuilder: React.FC<LogicConditionBuilderProps> = ({
               {formatLogicExpression(currentLogic, allQuestions)}
             </pre>
           </div>
+
+          {/* Quick Logic Flow JSON Manager */}
+          {onOpenLogicManager && (
+            <div className="pt-2 border-t border-[#c4c6cf]/40 flex justify-between items-center text-[11px]">
+              <span className="text-[#74777f]">Manage survey logic definitions:</span>
+              <button
+                type="button"
+                onClick={onOpenLogicManager}
+                className="px-2.5 py-1 bg-[#6b21a8]/10 hover:bg-[#6b21a8]/20 text-[#6b21a8] border border-[#6b21a8]/30 rounded-md font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[14px]">sync_alt</span>
+                <span>Export / Import JSON</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

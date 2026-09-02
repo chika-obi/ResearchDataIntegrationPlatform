@@ -3,7 +3,9 @@ import { Question, QuestionOption, DataType, MeasurementLevel, QuestionType, Que
 import { INITIAL_QUESTIONS } from '../data/mockData';
 import { PublicSurveyModal } from './PublicSurveyModal';
 import { LogicConditionBuilder } from './LogicConditionBuilder';
+import { LogicImportExportModal } from './LogicImportExportModal';
 import { formatLogicExpression } from '../lib/surveyLogicEvaluator';
+import { downloadLogicFlowJSON } from '../lib/logicImportExport';
 
 interface QuestionnaireBuilderViewProps {
   onOpenPreview?: () => void;
@@ -41,6 +43,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   const [isSavedToast, setIsSavedToast] = useState(false);
   const [showSurveyPreview, setShowSurveyPreview] = useState(false);
   const [showLogicMatrixModal, setShowLogicMatrixModal] = useState(false);
+  const [showLogicImportExportModal, setShowLogicImportExportModal] = useState(false);
+  const [importToastMessage, setImportToastMessage] = useState<string | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [copiedFieldLink, setCopiedFieldLink] = useState(false);
   const [copiedPublicLink, setCopiedPublicLink] = useState(false);
@@ -48,6 +52,15 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   const selectedQuestion = questions.find((q) => q.id === selectedQuestionId) || questions[0];
 
   const questionsWithLogicCount = questions.filter((q) => q.logicRule?.enabled && q.logicRule.branches.length > 0).length;
+
+  const handleApplyImportedQuestions = (updatedQuestions: Question[], notificationMsg?: string) => {
+    setQuestions(updatedQuestions);
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updatedQuestions));
+    if (notificationMsg) {
+      setImportToastMessage(notificationMsg);
+      setTimeout(() => setImportToastMessage(null), 4000);
+    }
+  };
 
   const handleUpdateSelected = (updatedFields: Partial<Question>) => {
     setQuestions((prev) => {
@@ -292,6 +305,15 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           </button>
 
           <button
+            onClick={() => setShowLogicImportExportModal(true)}
+            className="px-3 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="Export logic flow as JSON configuration or import questionnaire logic definitions"
+          >
+            <span className="material-symbols-outlined text-[18px]">sync_alt</span>
+            <span className="hidden md:inline">Export / Import Logic</span>
+          </button>
+
+          <button
             onClick={() => setIsShareModalOpen(true)}
             className="px-3.5 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5"
           >
@@ -445,6 +467,20 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
               >
                 <span className="material-symbols-outlined text-[16px] text-[#6b21a8]">add</span>
                 <span className="font-semibold text-[11px]">+ Append Branched Question</span>
+              </button>
+
+              <button
+                onClick={() => setShowLogicImportExportModal(true)}
+                className="w-full p-2 bg-[#006a68]/5 hover:bg-[#006a68]/15 text-[#006a68] border border-[#006a68]/30 rounded-lg text-left transition-colors flex items-center justify-between text-xs cursor-pointer"
+                title="Export or upload logic flow JSON definition"
+              >
+                <span className="flex items-center gap-1.5 font-bold text-[11px]">
+                  <span className="material-symbols-outlined text-[15px]">sync_alt</span>
+                  <span>JSON Flow Config</span>
+                </span>
+                <span className="text-[10px] bg-[#006a68]/10 text-[#006a68] px-1.5 py-0.5 rounded font-mono">
+                  Export / Import
+                </span>
               </button>
             </div>
           </div>
@@ -866,6 +902,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                   currentQuestion={selectedQuestion}
                   allQuestions={questions}
                   onUpdateLogic={(updatedLogic) => handleUpdateSelected({ logicRule: updatedLogic })}
+                  onOpenLogicManager={() => setShowLogicImportExportModal(true)}
                 />
               </div>
             )}
@@ -1171,12 +1208,25 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                   <p className="text-xs text-white/80">Complete IF-THEN-ELSE execution graph for {surveyTitle}</p>
                 </div>
               </div>
-              <button
-                onClick={() => setShowLogicMatrixModal(false)}
-                className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-[22px]">close</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setShowLogicMatrixModal(false);
+                    setShowLogicImportExportModal(true);
+                  }}
+                  className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer border border-white/20"
+                  title="Export logic flow or upload logic JSON definition"
+                >
+                  <span className="material-symbols-outlined text-[16px]">sync_alt</span>
+                  <span>Export / Import JSON</span>
+                </button>
+                <button
+                  onClick={() => setShowLogicMatrixModal(false)}
+                  className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[22px]">close</span>
+                </button>
+              </div>
             </div>
 
             {/* Modal Body */}
@@ -1280,19 +1330,63 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-[#f9f9ff] border-t border-[#c4c6cf]/40 flex justify-between items-center shrink-0">
-              <span className="text-[11px] text-[#43474e]">
-                Logic rules are evaluated sequentially during runtime in both respondent and offline collector interfaces.
-              </span>
+            <div className="p-4 bg-[#f9f9ff] border-t border-[#c4c6cf]/40 flex flex-wrap gap-2 justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadLogicFlowJSON(questions, surveyTitle);
+                  }}
+                  className="px-3 py-1.5 bg-[#4c1d95]/10 hover:bg-[#4c1d95]/20 text-[#4c1d95] border border-[#4c1d95]/30 rounded-lg font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">file_download</span>
+                  <span>Quick Export JSON</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLogicMatrixModal(false);
+                    setShowLogicImportExportModal(true);
+                  }}
+                  className="px-3 py-1.5 bg-[#006a68]/10 hover:bg-[#006a68]/20 text-[#006a68] border border-[#006a68]/30 rounded-lg font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">file_upload</span>
+                  <span>Import Logic JSON</span>
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => setShowLogicMatrixModal(false)}
-                className="px-5 py-2 bg-[#1a365d] text-white rounded-lg font-semibold hover:bg-[#002045] cursor-pointer"
+                className="px-5 py-2 bg-[#1a365d] text-white rounded-lg font-semibold hover:bg-[#002045] cursor-pointer text-xs"
               >
                 Close Matrix
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Logic Flow JSON Export & Import Modal */}
+      <LogicImportExportModal
+        isOpen={showLogicImportExportModal}
+        onClose={() => setShowLogicImportExportModal(false)}
+        questions={questions}
+        surveyTitle={surveyTitle}
+        onApplyImportedQuestions={handleApplyImportedQuestions}
+      />
+
+      {/* Toast Notification for Logic Import & Actions */}
+      {importToastMessage && (
+        <div className="fixed bottom-6 right-6 z-[140] bg-[#002045] text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-white/20 animate-in slide-in-from-bottom-5">
+          <span className="material-symbols-outlined text-[#34d399] text-[20px]">task_alt</span>
+          <span className="text-xs font-semibold">{importToastMessage}</span>
+          <button
+            onClick={() => setImportToastMessage(null)}
+            className="text-white/60 hover:text-white ml-2 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px]">close</span>
+          </button>
         </div>
       )}
     </div>

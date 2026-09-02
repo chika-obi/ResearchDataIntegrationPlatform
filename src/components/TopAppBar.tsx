@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { NavSection, UserProfile } from '../types';
+import { NavSection, Project, UserProfile } from '../types';
 import { checkSupabaseConnection, getSupabaseConfig, SupabaseHealthCheckResult } from '../lib/supabase';
+import { GlobalSearchBar } from './GlobalSearchBar';
 
 interface TopAppBarProps {
   currentSection: NavSection;
@@ -9,6 +10,10 @@ interface TopAppBarProps {
   onToggleAuthModal?: () => void;
   isOfflineMode: boolean;
   currentUser: UserProfile;
+  projects?: Project[];
+  onSelectProject?: (project: Project) => void;
+  onSelectEnumerator?: (enumeratorId: string) => void;
+  onSelectQuestion?: (questionId: string) => void;
 }
 
 export const TopAppBar: React.FC<TopAppBarProps> = ({
@@ -17,7 +22,11 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   onOpenMobileMenu,
   onToggleAuthModal,
   isOfflineMode,
-  currentUser
+  currentUser,
+  projects = [],
+  onSelectProject,
+  onSelectEnumerator,
+  onSelectQuestion
 }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showDbDetails, setShowDbDetails] = useState(false);
@@ -95,7 +104,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
         </div>
 
         {/* Section breadcrumbs (Desktop) */}
-        <div className="hidden lg:flex items-center gap-2 ml-4 text-[13px] text-[#43474e]">
+        <div className="hidden xl:flex items-center gap-2 ml-4 text-[13px] text-[#43474e]">
           <span className="material-symbols-outlined text-[16px] text-[#74777f]">chevron_right</span>
           <span className="capitalize font-semibold text-[#002045]">
             {currentSection.replace('-', ' ')}
@@ -103,11 +112,20 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
           {isOfflineMode && (
             <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#ba1a1a]/10 text-[#ba1a1a] border border-[#ba1a1a]/20">
               <span className="material-symbols-outlined text-[12px]">wifi_off</span>
-              Offline Simulation
+              Offline
             </span>
           )}
         </div>
       </div>
+
+      {/* Global Quick Search Bar */}
+      <GlobalSearchBar
+        projects={projects}
+        onNavigate={onNavigate}
+        onSelectProject={onSelectProject}
+        onSelectEnumerator={onSelectEnumerator}
+        onSelectQuestion={onSelectQuestion}
+      />
 
       {/* Right side tools */}
       <div className="flex items-center gap-2.5 sm:gap-3">

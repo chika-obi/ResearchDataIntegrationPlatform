@@ -1,5 +1,6 @@
 import React from 'react';
 import { Project, NavSection, UserProfile } from '../types';
+import { DashboardCompletionTrends } from './DashboardCompletionTrends';
 
 interface DashboardViewProps {
   projects: Project[];
@@ -185,6 +186,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 30-Day Survey Completion Trends Mini-Chart */}
+      <DashboardCompletionTrends
+        projects={projects}
+        onNavigateToAnalytics={() => onNavigate('visualizations')}
+        onSelectProject={onSelectProject}
+      />
 
       {/* Recent Projects Section */}
       <div className="bg-white rounded-xl border border-[#c4c6cf]/50 card-shadow overflow-hidden">

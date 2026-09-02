@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { updateEnumeratorTelemetry } from './enumeratorTelemetry';
 
 export interface SyncResponsePayload {
   questionnaireId: string;
@@ -37,6 +38,24 @@ export function saveResponseToLocalDb(payload: SyncResponsePayload & { id?: stri
     // Prepend new response
     const updated = [newRecord, ...existing.filter(r => r.id !== newRecord.id)];
     localStorage.setItem('rdip_collected_responses', JSON.stringify(updated));
+
+    // Update live enumerator telemetry if GPS is available
+    if (payload.gps && (payload.enumeratorId || payload.enumeratorName)) {
+      const enumId = payload.enumeratorId || payload.enumeratorName || 'EN-1048';
+      updateEnumeratorTelemetry(enumId, {
+        latitude: payload.gps.latitude,
+        longitude: payload.gps.longitude,
+        accuracy: payload.gps.accuracy || 4.2,
+        timestamp: payload.collectedAt || new Date().toISOString(),
+        address: `Live Geostamped Response #${newRecord.id}`
+      }, {
+        status: payload.syncStatus === 'synced' ? 'Synced' : 'Pending',
+        batteryLevel: payload.batteryLevel ?? 90,
+        responsesDelta: 1,
+        unsyncedDelta: payload.syncStatus === 'pending' ? 1 : 0
+      });
+    }
+
     return newRecord;
   } catch (err) {
     console.error('Error saving local response:', err);
@@ -139,3 +158,125 @@ export async function verifySupabaseTablesExist(): Promise<{
       : 'Tables have not been created yet in the Supabase SQL editor. Run the provided DDL script to create them.'
   };
 }
+
+export interface SyncLogEntry {
+  id: string;
+  timestamp: string;
+  type: 'background_auto' | 'manual_sync' | 'instant_submit' | 'network_check' | 'schema_pull';
+  status: 'success' | 'failed' | 'queued_offline' | 'no_records';
+  recordsAttempted: number;
+  recordsSynced: number;
+  networkState: 'online' | 'offline';
+  durationMs: number;
+  summary: string;
+  details?: string;
+  endpoint?: string;
+  error?: string;
+}
+
+const DEFAULT_SYNC_LOGS: SyncLogEntry[] = [
+  {
+    id: 'LOG-INIT-003',
+    timestamp: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
+    type: 'background_auto',
+    status: 'success',
+    recordsAttempted: 2,
+    recordsSynced: 2,
+    networkState: 'online',
+    durationMs: 340,
+    summary: 'Background heartbeat synchronized 2 field records',
+    details: 'Pushed batch records #REC-4417, #REC-4418 to remote PostgreSQL cluster.',
+    endpoint: 'Supabase / responses & response_answers'
+  },
+  {
+    id: 'LOG-INIT-002',
+    timestamp: new Date(Date.now() - 1000 * 60 * 38).toISOString(),
+    type: 'instant_submit',
+    status: 'queued_offline',
+    recordsAttempted: 1,
+    recordsSynced: 0,
+    networkState: 'offline',
+    durationMs: 42,
+    summary: 'Offline buffer ingested response #REC-4419',
+    details: 'Network connectivity offline. Stored safely in local persistent SQLite/IndexedDB queue.',
+    endpoint: 'Local Browser Cache (IndexedDB)'
+  },
+  {
+    id: 'LOG-INIT-001',
+    timestamp: new Date(Date.now() - 1000 * 60 * 65).toISOString(),
+    type: 'schema_pull',
+    status: 'success',
+    recordsAttempted: 0,
+    recordsSynced: 0,
+    networkState: 'online',
+    durationMs: 185,
+    summary: 'Questionnaire schema synchronized (v2.4.0)',
+    details: 'Verified survey definition hash with Researcher Hub. 8 active survey variables ready for data collection.',
+    endpoint: 'Supabase / questionnaires'
+  }
+];
+
+export function getStoredSyncLogs(): SyncLogEntry[] {
+  try {
+    const raw = localStorage.getItem('rdip_sync_history_logs');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+    // Return defaults if none saved
+    localStorage.setItem('rdip_sync_history_logs', JSON.stringify(DEFAULT_SYNC_LOGS));
+    return DEFAULT_SYNC_LOGS;
+  } catch {
+    return DEFAULT_SYNC_LOGS;
+  }
+}
+
+export function saveSyncLog(
+  log: Omit<SyncLogEntry, 'id' | 'timestamp'> & { id?: string; timestamp?: string }
+): SyncLogEntry {
+  try {
+    const existing = getStoredSyncLogs();
+    const newEntry: SyncLogEntry = {
+      id: log.id || `LOG-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`,
+      timestamp: log.timestamp || new Date().toISOString(),
+      type: log.type,
+      status: log.status,
+      recordsAttempted: log.recordsAttempted ?? 0,
+      recordsSynced: log.recordsSynced ?? 0,
+      networkState: log.networkState || 'offline',
+      durationMs: log.durationMs ?? 0,
+      summary: log.summary,
+      details: log.details,
+      endpoint: log.endpoint || 'Supabase PostgreSQL / responses',
+      error: log.error
+    };
+
+    const updated = [newEntry, ...existing].slice(0, 100); // keep last 100 logs
+    localStorage.setItem('rdip_sync_history_logs', JSON.stringify(updated));
+
+    try {
+      window.dispatchEvent(new CustomEvent('rdip_sync_log_added', { detail: newEntry }));
+    } catch {}
+
+    return newEntry;
+  } catch (e) {
+    console.error('Failed to save sync log:', e);
+    return {
+      id: `LOG-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      ...log
+    };
+  }
+}
+
+export function clearStoredSyncLogs(): void {
+  try {
+    localStorage.setItem('rdip_sync_history_logs', JSON.stringify([]));
+    try {
+      window.dispatchEvent(new CustomEvent('rdip_sync_log_cleared'));
+    } catch {}
+  } catch {}
+}
+
