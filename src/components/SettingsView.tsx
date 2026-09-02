@@ -1,9 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { INITIAL_USER } from '../data/mockData';
+import { UserProfile } from '../types';
 import { getSupabaseConfig, saveSupabaseConfig, checkSupabaseConnection, SupabaseHealthCheckResult } from '../lib/supabase';
 
-export const SettingsView: React.FC = () => {
-  const [user, setUser] = useState(() => {
+interface SettingsViewProps {
+  currentUser?: UserProfile;
+  onUpdateUser?: (user: UserProfile) => void;
+}
+
+export const SettingsView: React.FC<SettingsViewProps> = ({
+  currentUser,
+  onUpdateUser
+}) => {
+  const [user, setUser] = useState<UserProfile>(() => {
+    if (currentUser) return currentUser;
     const saved = localStorage.getItem('rdip_user_profile');
     if (saved) {
       try {
@@ -14,6 +24,12 @@ export const SettingsView: React.FC = () => {
     }
     return INITIAL_USER;
   });
+
+  useEffect(() => {
+    if (currentUser) {
+      setUser(currentUser);
+    }
+  }, [currentUser]);
   const [storageUsed, setStorageUsed] = useState(14.8);
   const [e2eEnabled, setE2eEnabled] = useState(true);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -56,6 +72,9 @@ export const SettingsView: React.FC = () => {
           const updated = { ...user, avatar: newAvatar };
           setUser(updated);
           localStorage.setItem('rdip_user_profile', JSON.stringify(updated));
+          if (onUpdateUser) {
+            onUpdateUser(updated);
+          }
         }
       };
       reader.readAsDataURL(file);
@@ -65,6 +84,9 @@ export const SettingsView: React.FC = () => {
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     localStorage.setItem('rdip_user_profile', JSON.stringify(user));
+    if (onUpdateUser) {
+      onUpdateUser(user);
+    }
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
   };
@@ -234,9 +256,8 @@ export const SettingsView: React.FC = () => {
             </div>
             <div className="text-center sm:text-left space-y-1">
               <h3 className="font-bold text-[#002045] text-base">{user.name}</h3>
-              <p className="text-xs text-[#43474e]">{user.email}</p>
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <span className="px-2.5 py-0.5 rounded bg-[#1a365d]/10 text-[#1a365d] text-[11px] font-bold">
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <span className="px-2.5 py-0.5 rounded bg-[#1a365d]/10 text-[#1a365d] text-[11px] font-bold uppercase border border-[#1a365d]/20">
                   {user.role}
                 </span>
                 <label className="cursor-pointer px-2.5 py-1 bg-white border border-[#c4c6cf] hover:border-[#1a365d] text-[#1a365d] rounded text-[11px] font-semibold hover:bg-[#f1f3ff] transition-all inline-flex items-center gap-1 shadow-2xs">
@@ -250,6 +271,10 @@ export const SettingsView: React.FC = () => {
                   />
                 </label>
               </div>
+              <div className="text-xs font-semibold text-[#1a365d] pt-0.5">
+                {user.institution}
+              </div>
+              <p className="text-xs text-[#74777f]">{user.email}</p>
             </div>
           </div>
 

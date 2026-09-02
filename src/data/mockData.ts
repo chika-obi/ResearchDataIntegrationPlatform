@@ -195,6 +195,31 @@ export const INITIAL_QUESTIONS: Question[] = [
     dataType: 'Categorical',
     measurementLevel: 'Nominal',
     dataTypeConstraint: 'Categorical (Nominal)',
+    logicRule: {
+      enabled: true,
+      branches: [
+        {
+          id: 'branch-q5-if',
+          branchType: 'IF',
+          matchType: 'ALL',
+          clauses: [
+            {
+              id: 'clause-q5-1',
+              sourceVariable: 'Q4_Clinic_Distance_KM',
+              operator: 'greater_than',
+              value: 0
+            }
+          ],
+          action: 'show'
+        },
+        {
+          id: 'branch-q5-else',
+          branchType: 'ELSE',
+          clauses: [],
+          action: 'hide'
+        }
+      ]
+    },
     options: [
       { id: 'tr-1', label: 'Walking / Foot', numericCode: 1 },
       { id: 'tr-2', label: 'Bicycle / Micro-mobility', numericCode: 2 },
@@ -255,6 +280,8 @@ export const INITIAL_QUESTIONS: Question[] = [
     measurementLevel: 'Nominal'
   }
 ];
+
+export const DEFAULT_QUESTIONS = INITIAL_QUESTIONS;
 
 export const INITIAL_VARIABLE_DICTIONARY: VariableDictionaryItem[] = [
   {

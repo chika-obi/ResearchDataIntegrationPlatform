@@ -1,38 +1,96 @@
 import React from 'react';
-import { Project, NavSection } from '../types';
+import { Project, NavSection, UserProfile } from '../types';
 
 interface DashboardViewProps {
   projects: Project[];
+  currentUser?: UserProfile;
   onNavigate: (section: NavSection) => void;
   onOpenCreateProject: () => void;
+  onOpenProfile?: () => void;
   onSelectProject?: (project: Project) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   projects,
+  currentUser,
   onNavigate,
   onOpenCreateProject,
+  onOpenProfile,
   onSelectProject
 }) => {
   const totalResponses = projects.reduce((acc, p) => acc + p.responsesCount, 3457);
 
+  // Dynamic user details
+  const userName = currentUser?.name || 'Dr. Aris Thorne';
+  const userRole = currentUser?.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : 'Researcher';
+  const userInstitution = currentUser?.institution || 'Global Demographics Institute';
+  const userDepartment = currentUser?.department || 'Quantitative Methods & Demography';
+
+  // Dynamic time-based greeting
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) return 'Good morning';
+    if (hour >= 12 && hour < 17) return 'Good afternoon';
+    if (hour >= 17 && hour < 22) return 'Good evening';
+    return 'Welcome back';
+  };
+
   return (
     <div className="max-w-[1280px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Welcome Banner */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-[#002045] tracking-tight">
-            Welcome back, Dr. Aris Thorne
-          </h1>
-          <p className="text-[#43474e] text-sm md:text-base mt-1">
-            Here is an overview of your active research projects and field operations.
-          </p>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 md:p-6 rounded-2xl border border-[#c4c6cf]/50 card-shadow">
+        <div className="flex items-start sm:items-center gap-4">
+          {currentUser?.avatar && (
+            <button
+              onClick={onOpenProfile}
+              title="Click to edit profile or switch persona"
+              className="relative group shrink-0"
+            >
+              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border-2 border-[#1a365d] bg-[#dde2f3] shadow-xs group-hover:ring-2 group-hover:ring-[#1a365d]/40 transition-all">
+                <img
+                  src={currentUser.avatar}
+                  alt={userName}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="absolute -bottom-1 -right-1 bg-[#1a365d] text-white p-1 rounded-full text-[10px] shadow-xs opacity-90 group-hover:scale-110 transition-transform">
+                <span className="material-symbols-outlined text-[12px] block">edit</span>
+              </div>
+            </button>
+          )}
+
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-2xl md:text-3xl font-bold text-[#002045] tracking-tight">
+                {getGreeting()}, <span className="text-[#1a365d]">{userName}</span>
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full bg-[#1a365d]/10 text-[#1a365d] text-xs font-bold uppercase tracking-wider border border-[#1a365d]/20">
+                {userRole}
+              </span>
+            </div>
+            <p className="text-[#43474e] text-xs md:text-sm mt-1 flex items-center gap-1.5 flex-wrap">
+              <span>{userDepartment}</span>
+              <span className="opacity-40">•</span>
+              <span className="font-medium text-[#002045]">{userInstitution}</span>
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3 w-full md:w-auto">
+        <div className="flex items-center gap-2.5 w-full md:w-auto shrink-0">
+          {onOpenProfile && (
+            <button
+              onClick={onOpenProfile}
+              className="px-3.5 py-2.5 rounded-lg border border-[#c4c6cf] hover:border-[#1a365d] text-[#002045] hover:bg-[#f1f3ff] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+              title="Edit Name, Photo, or Switch Role"
+            >
+              <span className="material-symbols-outlined text-[16px]">manage_accounts</span>
+              <span className="hidden sm:inline">Edit Profile</span>
+            </button>
+          )}
+
           <button
             onClick={onOpenCreateProject}
-            className="w-full md:w-auto bg-[#1a365d] hover:bg-[#002045] text-white px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm transition-all duration-150 active:scale-[0.98]"
+            className="flex-1 md:flex-initial bg-[#1a365d] hover:bg-[#002045] text-white px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 shadow-sm transition-all duration-150 active:scale-[0.98]"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
             <span>Create New Project</span>

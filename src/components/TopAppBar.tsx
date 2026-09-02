@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavSection, UserProfile } from '../types';
+import { checkSupabaseConnection, getSupabaseConfig, SupabaseHealthCheckResult } from '../lib/supabase';
 
 interface TopAppBarProps {
   currentSection: NavSection;
@@ -19,6 +20,45 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   currentUser
 }) => {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showDbDetails, setShowDbDetails] = useState(false);
+
+  // Supabase Connection Status
+  const [supabaseStatus, setSupabaseStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
+  const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthCheckResult | null>(null);
+  const [isRetryingCheck, setIsRetryingCheck] = useState(false);
+
+  const performHealthCheck = async () => {
+    setIsRetryingCheck(true);
+    try {
+      const result = await checkSupabaseConnection();
+      setSupabaseHealth(result);
+      setSupabaseStatus(result.connected ? 'connected' : 'disconnected');
+    } catch {
+      setSupabaseStatus('disconnected');
+    } finally {
+      setIsRetryingCheck(false);
+    }
+  };
+
+  useEffect(() => {
+    performHealthCheck();
+
+    // Check periodically every 30 seconds
+    const interval = setInterval(() => {
+      performHealthCheck();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const config = getSupabaseConfig();
+  const supabaseHost = (() => {
+    try {
+      return new URL(config.supabaseUrl).hostname;
+    } catch {
+      return config.supabaseUrl;
+    }
+  })();
 
   const notifications = [
     { id: 1, title: 'Data Quality Anomaly', desc: 'Outlier value in Q4_Clinic_Distance_KM (420.0 km flagged)', time: '12m ago', unread: true },
@@ -70,7 +110,147 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
       </div>
 
       {/* Right side tools */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* Supabase Connection Status Light Indicator */}
+        <div className="relative">
+          <button
+            id="supabase-status-indicator"
+            onClick={() => setShowDbDetails(!showDbDetails)}
+            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+              supabaseStatus === 'connected'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 hover:bg-emerald-500/20'
+                : supabaseStatus === 'disconnected'
+                ? 'bg-[#ba1a1a]/10 border-[#ba1a1a]/30 text-[#ba1a1a] hover:bg-[#ba1a1a]/20'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-800 hover:bg-amber-500/20'
+            }`}
+            title={`Supabase: ${supabaseStatus === 'connected' ? 'Active' : supabaseStatus === 'disconnected' ? 'Disconnected' : 'Checking...'}`}
+          >
+            {/* Status Light */}
+            <span className="relative flex h-2 w-2">
+              {supabaseStatus === 'connected' && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              )}
+              <span
+                className={`relative inline-flex rounded-full h-2 w-2 ${
+                  supabaseStatus === 'connected'
+                    ? 'bg-emerald-500'
+                    : supabaseStatus === 'disconnected'
+                    ? 'bg-[#ba1a1a]'
+                    : 'bg-amber-500 animate-pulse'
+                }`}
+              />
+            </span>
+
+            <span className="hidden sm:inline-block font-mono text-[11px] font-bold tracking-tight">
+              Supabase
+            </span>
+            <span className="text-[10px] uppercase font-bold tracking-wider hidden md:inline-block opacity-80">
+              {supabaseStatus === 'connected'
+                ? 'Active'
+                : supabaseStatus === 'disconnected'
+                ? 'Offline'
+                : 'Checking'}
+            </span>
+          </button>
+
+          {/* Detailed Connection Popover */}
+          {showDbDetails && (
+            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-xl border border-[#c4c6cf]/60 p-4 z-50 animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center justify-between pb-2.5 border-b border-[#c4c6cf]/40 mb-3">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      supabaseStatus === 'connected'
+                        ? 'bg-emerald-500 shadow-xs shadow-emerald-500'
+                        : supabaseStatus === 'disconnected'
+                        ? 'bg-[#ba1a1a]'
+                        : 'bg-amber-500 animate-pulse'
+                    }`}
+                  />
+                  <span className="text-xs font-bold text-[#002045]">
+                    Supabase Database Connection
+                  </span>
+                </div>
+                <span
+                  className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                    supabaseStatus === 'connected'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : supabaseStatus === 'disconnected'
+                      ? 'bg-[#ffdad6] text-[#ba1a1a]'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}
+                >
+                  {supabaseStatus === 'connected'
+                    ? 'Connected (Green)'
+                    : supabaseStatus === 'disconnected'
+                    ? 'Disconnected (Red)'
+                    : 'Testing'}
+                </span>
+              </div>
+
+              <div className="space-y-2 text-xs text-[#43474e]">
+                <div className="bg-[#f9f9ff] p-2.5 rounded-xl border border-[#c4c6cf]/40 space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-[#74777f]">Config Source:</span>
+                    <span className="font-mono text-[#002045] font-semibold text-[11px]">
+                      VITE_SUPABASE_URL
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#74777f]">Endpoint Host:</span>
+                    <span className="font-mono text-[#002045] text-[11px] truncate max-w-[180px]" title={supabaseHost}>
+                      {supabaseHost}
+                    </span>
+                  </div>
+                  {supabaseHealth?.latencyMs !== undefined && (
+                    <div className="flex justify-between">
+                      <span className="text-[#74777f]">API Latency:</span>
+                      <span className="font-mono text-emerald-700 font-bold text-[11px]">
+                        {supabaseHealth.latencyMs} ms
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#74777f]">API Anon Key:</span>
+                    <span className="font-mono text-[10px] text-[#74777f] bg-white px-1.5 py-0.5 rounded border border-[#c4c6cf]/30">
+                      VITE_SUPABASE_ANON_KEY (Active)
+                    </span>
+                  </div>
+                </div>
+
+                {supabaseHealth?.message && (
+                  <p className="text-[11px] text-[#43474e] leading-tight px-1">
+                    {supabaseHealth.message}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 mt-4 pt-3 border-t border-[#c4c6cf]/40">
+                <button
+                  onClick={performHealthCheck}
+                  disabled={isRetryingCheck}
+                  className="flex-1 px-3 py-1.5 rounded-lg bg-[#006a68] hover:bg-[#004e4c] text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <span className={`material-symbols-outlined text-[14px] ${isRetryingCheck ? 'animate-spin' : ''}`}>
+                    refresh
+                  </span>
+                  <span>{isRetryingCheck ? 'Checking...' : 'Re-test Connection'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowDbDetails(false);
+                    onNavigate('settings');
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-[#c4c6cf] hover:bg-[#f1f3ff] text-[#002045] text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Settings
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Notification Bell */}
         <div className="relative">
           <button
@@ -137,3 +317,4 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
     </header>
   );
 };
+

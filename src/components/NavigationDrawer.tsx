@@ -40,45 +40,47 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   const drawerContent = (
     <div className="flex flex-col h-full bg-[#f9f9ff] text-[#161c27] select-none">
       {/* User Header & Persona Switcher */}
-      <div className="p-5 border-b border-[#c4c6cf]/60 bg-white">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full overflow-hidden bg-[#dde2f3] shrink-0 border border-[#c4c6cf]/60 shadow-xs">
+      <div className="p-4 border-b border-[#c4c6cf]/60 bg-white">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start gap-3 min-w-0 flex-1">
+            <div className="w-10 h-10 rounded-full overflow-hidden bg-[#dde2f3] shrink-0 border border-[#c4c6cf]/60 shadow-xs mt-0.5">
               <img
                 src={currentUser.avatar}
                 alt="Avatar"
                 className="w-full h-full object-cover"
               />
             </div>
-            <div className="overflow-hidden">
+            <div className="min-w-0 flex-1">
               <h2 className="text-sm font-bold text-[#002045] truncate leading-tight">
                 {currentUser.name}
               </h2>
-              <div className="flex items-center gap-1.5 mt-0.5">
+              {/* Role badge */}
+              <div className="mt-1">
                 <span
-                  className={`inline-block text-[10px] font-bold uppercase px-1.5 py-0.2 rounded ${
+                  className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
                     currentUser.role === 'researcher'
-                      ? 'bg-[#1a365d]/10 text-[#1a365d]'
+                      ? 'bg-[#1a365d]/10 text-[#1a365d] border border-[#1a365d]/20'
                       : currentUser.role === 'admin'
-                      ? 'bg-[#371800]/15 text-[#572900]'
-                      : 'bg-[#006a68]/15 text-[#006a68]'
+                      ? 'bg-[#371800]/15 text-[#572900] border border-[#572900]/20'
+                      : 'bg-[#006a68]/15 text-[#006a68] border border-[#006a68]/20'
                   }`}
                 >
                   {currentUser.role}
                 </span>
-                <span className="text-[11px] text-[#74777f] truncate">
-                  {currentUser.institution.split('&')[0]}
-                </span>
+              </div>
+              {/* Institution directly under Role */}
+              <div className="mt-1 text-[11px] text-[#43474e] font-medium leading-snug line-clamp-2" title={currentUser.institution}>
+                {currentUser.institution}
               </div>
             </div>
           </div>
 
           <button
             onClick={onOpenAuthModal}
-            className="p-1.5 rounded-lg text-[#74777f] hover:text-[#002045] hover:bg-[#f1f3ff] transition-colors"
-            title="Switch User Role / Session"
+            className="p-1.5 rounded-lg text-[#74777f] hover:text-[#002045] hover:bg-[#f1f3ff] transition-colors shrink-0 mt-0.5"
+            title="Edit Profile, Switch Role or Upload Photo"
           >
-            <span className="material-symbols-outlined text-[18px]">manage_accounts</span>
+            <span className="material-symbols-outlined text-[20px]">manage_accounts</span>
           </button>
         </div>
       </div>

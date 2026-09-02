@@ -108,8 +108,10 @@ export default function App() {
           {currentSection === 'dashboard' && (
             <DashboardView
               projects={projects}
+              currentUser={currentUser}
               onNavigate={handleNavigate}
               onOpenCreateProject={() => setIsCreateProjectOpen(true)}
+              onOpenProfile={() => setIsAuthModalOpen(true)}
               onSelectProject={(p) => {
                 setSelectedProject(p);
                 handleNavigate('projects');
@@ -143,7 +145,10 @@ export default function App() {
           )}
 
           {currentSection === 'offline-collector' && (
-            <OfflineFieldInterface onReturnToHub={() => handleNavigate('enumerators')} />
+            <OfflineFieldInterface 
+              onReturnToHub={() => handleNavigate('enumerators')} 
+              currentUser={currentUser}
+            />
           )}
 
           {currentSection === 'statistical-analysis' && <StatisticalAnalysisView />}
@@ -154,7 +159,12 @@ export default function App() {
 
           {currentSection === 'audit-security' && <AuditSecurityView />}
 
-          {currentSection === 'settings' && <SettingsView />}
+          {currentSection === 'settings' && (
+            <SettingsView
+              currentUser={currentUser}
+              onUpdateUser={handleUpdateUser}
+            />
+          )}
         </main>
       </div>
 
@@ -177,7 +187,7 @@ export default function App() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
-        onUpdateUser={setCurrentUser}
+        onUpdateUser={handleUpdateUser}
       />
     </div>
   );

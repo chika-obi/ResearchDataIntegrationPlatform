@@ -1,17 +1,38 @@
 import React, { useState } from 'react';
-import { Question, QuestionOption, DataType, MeasurementLevel, QuestionType } from '../types';
+import { Question, QuestionOption, DataType, MeasurementLevel, QuestionType, QuestionLogicRule } from '../types';
 import { INITIAL_QUESTIONS } from '../data/mockData';
 import { PublicSurveyModal } from './PublicSurveyModal';
+import { LogicConditionBuilder } from './LogicConditionBuilder';
+import { formatLogicExpression } from '../lib/surveyLogicEvaluator';
 
 interface QuestionnaireBuilderViewProps {
   onOpenPreview?: () => void;
 }
 
 export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> = () => {
-  const [questions, setQuestions] = useState<Question[]>(INITIAL_QUESTIONS);
+  const [questions, setQuestions] = useState<Question[]>(() => {
+    const saved = localStorage.getItem('rdip_active_questionnaire');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return INITIAL_QUESTIONS;
+      }
+    }
+    return INITIAL_QUESTIONS;
+  });
+
   const [selectedQuestionId, setSelectedQuestionId] = useState<string>('q2');
-  const [surveyTitle, setSurveyTitle] = useState('National Health Infrastructure Assessment Questionnaire');
-  const [surveyVersion, setSurveyVersion] = useState('v2.0 (Active)');
+  const [inspectorTab, setInspectorTab] = useState<'config' | 'logic' | 'metadata'>('config');
+
+  const [surveyTitle, setSurveyTitle] = useState(() => {
+    return localStorage.getItem('rdip_survey_title') || 'National Health Infrastructure Assessment Questionnaire';
+  });
+
+  const [surveyVersion, setSurveyVersion] = useState(() => {
+    return localStorage.getItem('rdip_survey_version') || 'v2.0 (Active)';
+  });
+
   const [surveyStyle, setSurveyStyle] = useState<'academic' | 'modern' | 'onepage'>('academic');
   const [surveySection, setSurveySection] = useState('Section A: Demographic Profile & Socio-Economic Status');
   const [surveySectionDesc, setSurveySectionDesc] = useState(
@@ -19,21 +40,27 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   );
   const [isSavedToast, setIsSavedToast] = useState(false);
   const [showSurveyPreview, setShowSurveyPreview] = useState(false);
+  const [showLogicMatrixModal, setShowLogicMatrixModal] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [copiedFieldLink, setCopiedFieldLink] = useState(false);
   const [copiedPublicLink, setCopiedPublicLink] = useState(false);
 
   const selectedQuestion = questions.find((q) => q.id === selectedQuestionId) || questions[0];
 
+  const questionsWithLogicCount = questions.filter((q) => q.logicRule?.enabled && q.logicRule.branches.length > 0).length;
+
   const handleUpdateSelected = (updatedFields: Partial<Question>) => {
-    setQuestions((prev) =>
-      prev.map((q) => (q.id === selectedQuestionId ? { ...q, ...updatedFields } : q))
-    );
+    setQuestions((prev) => {
+      const updated = prev.map((q) => (q.id === selectedQuestionId ? { ...q, ...updatedFields } : q));
+      localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const handleAddQuestion = (
     type: QuestionType,
-    defaultTitle = 'New Questionnaire Item'
+    defaultTitle = 'New Questionnaire Item',
+    withDefaultLogic = false
   ) => {
     const newId = `q-${Date.now().toString().slice(-5)}`;
     const newNum = `Q${questions.length + 1}`;
@@ -81,11 +108,41 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           : [],
       linkedObjective: 'Objective 2: Evaluate socio-demographic disparities in healthcare accessibility',
       dataTypeConstraint: defaultDataType === 'Numerical' ? 'Numeric (Continuous)' : 'Categorical (Nominal)',
-      validationRules: type === 'number' ? { min: 0, max: 100 } : undefined
+      validationRules: type === 'number' ? { min: 0, max: 100 } : undefined,
+      logicRule: withDefaultLogic && questions.length > 0 ? {
+        enabled: true,
+        branches: [
+          {
+            id: `branch-${Date.now()}-if`,
+            branchType: 'IF',
+            matchType: 'ALL',
+            clauses: [
+              {
+                id: `cl-${Date.now()}`,
+                sourceVariable: questions[questions.length - 1].variableName,
+                operator: 'is_not_empty',
+                value: ''
+              }
+            ],
+            action: 'show'
+          },
+          {
+            id: `branch-${Date.now()}-else`,
+            branchType: 'ELSE',
+            clauses: [],
+            action: 'hide'
+          }
+        ]
+      } : undefined
     };
 
-    setQuestions([...questions, newQuestion]);
+    const updated = [...questions, newQuestion];
+    setQuestions(updated);
     setSelectedQuestionId(newId);
+    if (withDefaultLogic) {
+      setInspectorTab('logic');
+    }
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
   };
 
   const handleDuplicateQuestion = (id: string) => {
@@ -99,8 +156,10 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       variableName: `${target.variableName}_Copy`,
       title: `${target.title} (Duplicate)`
     };
-    setQuestions([...questions, dup]);
+    const updated = [...questions, dup];
+    setQuestions(updated);
     setSelectedQuestionId(newId);
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
   };
 
   const handleDeleteQuestion = (id: string) => {
@@ -110,6 +169,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     if (selectedQuestionId === id) {
       setSelectedQuestionId(updated[0].id);
     }
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
   };
 
   const handleAddOption = () => {
@@ -138,15 +198,22 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   };
 
   const handleSave = () => {
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(questions));
+    localStorage.setItem('rdip_survey_title', surveyTitle);
+    localStorage.setItem('rdip_survey_version', surveyVersion);
+    localStorage.setItem('rdip_survey_style', surveyStyle);
+    localStorage.setItem('rdip_survey_last_saved', new Date().toLocaleTimeString());
     setIsSavedToast(true);
-    setTimeout(() => setIsSavedToast(false), 2500);
+    setTimeout(() => setIsSavedToast(false), 3000);
   };
 
   const handleCreateNewVersion = () => {
-    const nextVer = `v${(parseFloat(surveyVersion.replace('v', '')) + 0.1).toFixed(1)}`;
+    const nextVer = `v${(parseFloat(surveyVersion.replace('v', '')) + 0.1).toFixed(1)} (Active)`;
     setSurveyVersion(nextVer);
+    localStorage.setItem('rdip_survey_version', nextVer);
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(questions));
     setIsSavedToast(true);
-    setTimeout(() => setIsSavedToast(false), 2500);
+    setTimeout(() => setIsSavedToast(false), 3000);
   };
 
   return (
@@ -209,6 +276,20 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
               One-Page
             </button>
           </div>
+
+          <button
+            onClick={() => setShowLogicMatrixModal(true)}
+            className="px-3 py-1.5 bg-[#6b21a8]/10 text-[#6b21a8] border border-[#6b21a8]/30 hover:bg-[#6b21a8]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="View full questionnaire branching logic flowchart"
+          >
+            <span className="material-symbols-outlined text-[18px]">alt_route</span>
+            <span className="hidden md:inline">Logic Matrix</span>
+            {questionsWithLogicCount > 0 && (
+              <span className="bg-[#6b21a8] text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                {questionsWithLogicCount}
+              </span>
+            )}
+          </button>
 
           <button
             onClick={() => setIsShareModalOpen(true)}
@@ -328,6 +409,44 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
               </span>
               <span className="text-xs font-semibold text-[#161c27]">Date & Time</span>
             </button>
+
+            {/* Logical Conditions & Branching Category in Bank */}
+            <div className="pt-3 mt-2 border-t border-[#c4c6cf]/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-[#6b21a8] tracking-wider flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px]">alt_route</span>
+                  Flow & Logic Engine
+                </span>
+                {questionsWithLogicCount > 0 && (
+                  <span className="bg-[#6b21a8]/15 text-[#6b21a8] text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                    {questionsWithLogicCount} Active
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={() => {
+                  setInspectorTab('logic');
+                }}
+                className="w-full p-2.5 border border-[#6b21a8]/40 rounded-xl bg-[#6b21a8]/5 hover:bg-[#6b21a8]/10 text-left transition-all group cursor-pointer"
+              >
+                <div className="flex items-center gap-2 text-xs font-bold text-[#6b21a8]">
+                  <span className="material-symbols-outlined text-[18px]">rule</span>
+                  <span>IF-THEN-ELSE Condition</span>
+                </div>
+                <p className="text-[10px] text-[#43474e] mt-1">
+                  Configure branching for {selectedQuestion?.number || 'selected item'}
+                </p>
+              </button>
+
+              <button
+                onClick={() => handleAddQuestion('multiple-choice', 'Conditional Follow-up Item', true)}
+                className="w-full p-2 border border-dashed border-[#6b21a8]/60 rounded-lg text-left hover:bg-[#f1f3ff] transition-colors flex items-center gap-2 text-xs text-[#002045]"
+              >
+                <span className="material-symbols-outlined text-[16px] text-[#6b21a8]">add</span>
+                <span className="font-semibold text-[11px]">+ Append Branched Question</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -355,6 +474,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             {/* Questions List */}
             {questions.map((question, index) => {
               const isActive = question.id === selectedQuestionId;
+              const hasActiveLogic = question.logicRule?.enabled && question.logicRule.branches.length > 0;
+
               return (
                 <div
                   key={question.id}
@@ -366,7 +487,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                   }`}
                 >
                   {/* Item Order Index */}
-                  <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-[#002045] bg-[#d6e3ff] px-2.5 py-1 rounded font-mono">
                         {question.number}
@@ -383,7 +504,13 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
+                      {hasActiveLogic && (
+                        <span className="text-[10px] bg-[#6b21a8]/15 text-[#6b21a8] font-bold px-2 py-0.5 rounded flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[13px]">alt_route</span>
+                          Logic Active
+                        </span>
+                      )}
                       {question.required && (
                         <span className="text-[10px] bg-[#ba1a1a]/10 text-[#ba1a1a] font-bold px-2 py-0.5 rounded">
                           Required
@@ -391,6 +518,28 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                       )}
                     </div>
                   </div>
+
+                  {/* Logic Expression Badge if active */}
+                  {hasActiveLogic && (
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedQuestionId(question.id);
+                        setInspectorTab('logic');
+                      }}
+                      className="my-2.5 p-2 bg-[#fdf4ff] border border-[#d8b4fe] rounded-lg flex items-center justify-between text-[11px] text-[#6b21a8] hover:bg-[#fae8ff] transition-colors cursor-pointer"
+                      title="Click to edit IF/ELIF/ELSE logic rules"
+                    >
+                      <div className="flex items-center gap-1.5 font-mono overflow-hidden text-ellipsis whitespace-nowrap">
+                        <span className="material-symbols-outlined text-[16px] shrink-0 text-[#7e22ce]">rule</span>
+                        <span className="font-bold shrink-0">CONDITION:</span>
+                        <span className="text-[#3b0764] truncate">{formatLogicExpression(question.logicRule)}</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-[#7e22ce] hover:underline shrink-0 ml-2">
+                        Edit Logic →
+                      </span>
+                    </div>
+                  )}
 
                   {/* Question Content preview based on type */}
                   <div className="pl-6 md:pl-8 space-y-2 mt-3">
@@ -498,6 +647,23 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                         >
                           <span className="material-symbols-outlined text-[18px]">delete</span>
                         </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedQuestionId(question.id);
+                            setInspectorTab('logic');
+                          }}
+                          className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                            hasActiveLogic
+                              ? 'bg-[#6b21a8]/15 text-[#6b21a8] hover:bg-[#6b21a8]/25'
+                              : 'text-[#43474e] hover:bg-[#f1f3ff] border border-[#c4c6cf]/60'
+                          }`}
+                          title="Configure conditional visibility and skip logic"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">alt_route</span>
+                          <span>{hasActiveLogic ? 'Edit Logic' : '+ Add IF-ELSE'}</span>
+                        </button>
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -539,181 +705,304 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         </div>
 
         {/* Right Panel: Properties Inspector */}
-        <div className="w-80 border-l border-[#c4c6cf]/60 bg-white flex flex-col shrink-0 overflow-y-auto">
-          <div className="p-4 border-b border-[#c4c6cf]/40 bg-[#f9f9ff] flex items-center justify-between">
-            <h2 className="text-xs font-bold text-[#002045] uppercase tracking-wider">
-              Properties Inspector
-            </h2>
-            <span className="text-[10px] font-mono font-bold text-[#1a365d] bg-[#dde2f3] px-2 py-0.5 rounded">
-              {selectedQuestion?.number}
-            </span>
+        <div className="w-84 md:w-96 border-l border-[#c4c6cf]/60 bg-white flex flex-col shrink-0 overflow-y-auto">
+          {/* Header & Tabs */}
+          <div className="border-b border-[#c4c6cf]/40 bg-[#f9f9ff]">
+            <div className="p-3.5 flex items-center justify-between border-b border-[#c4c6cf]/20">
+              <h2 className="text-xs font-bold text-[#002045] uppercase tracking-wider flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[16px] text-[#1a365d]">tune</span>
+                Inspector
+              </h2>
+              <span className="text-[10px] font-mono font-bold text-[#1a365d] bg-[#dde2f3] px-2 py-0.5 rounded">
+                {selectedQuestion?.number}
+              </span>
+            </div>
+
+            {/* Tab Selector */}
+            <div className="grid grid-cols-3 p-1.5 gap-1 bg-[#f1f3ff] text-xs font-semibold">
+              <button
+                onClick={() => setInspectorTab('config')}
+                className={`py-1.5 px-2 rounded-lg text-center transition-colors flex items-center justify-center gap-1 ${
+                  inspectorTab === 'config'
+                    ? 'bg-white text-[#002045] shadow-xs'
+                    : 'text-[#43474e] hover:text-[#002045]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">settings</span>
+                <span>Config</span>
+              </button>
+
+              <button
+                onClick={() => setInspectorTab('logic')}
+                className={`py-1.5 px-2 rounded-lg text-center transition-colors flex items-center justify-center gap-1 relative ${
+                  inspectorTab === 'logic'
+                    ? 'bg-white text-[#6b21a8] font-bold shadow-xs'
+                    : 'text-[#43474e] hover:text-[#6b21a8]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px] text-[#6b21a8]">alt_route</span>
+                <span>Logic</span>
+                {selectedQuestion?.logicRule?.enabled && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#6b21a8] animate-pulse" />
+                )}
+              </button>
+
+              <button
+                onClick={() => setInspectorTab('metadata')}
+                className={`py-1.5 px-2 rounded-lg text-center transition-colors flex items-center justify-center gap-1 ${
+                  inspectorTab === 'metadata'
+                    ? 'bg-white text-[#002045] shadow-xs'
+                    : 'text-[#43474e] hover:text-[#002045]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">analytics</span>
+                <span>Metadata</span>
+              </button>
+            </div>
           </div>
 
           <div className="p-4 space-y-6">
-            {/* Basic Setup */}
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold text-[#002045] border-b border-[#c4c6cf]/30 pb-1.5">
-                Item Configuration
-              </h3>
+            {/* TAB 1: Item Config */}
+            {inspectorTab === 'config' && (
+              <div className="space-y-5">
+                {/* Basic Setup */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-[#002045] border-b border-[#c4c6cf]/30 pb-1.5 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[15px] text-[#1a365d]">edit_note</span>
+                    Question Setup
+                  </h3>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
-                  Question Prompt Text
-                </label>
-                <textarea
-                  rows={3}
-                  value={selectedQuestion?.title || ''}
-                  onChange={(e) => handleUpdateSelected({ title: e.target.value })}
-                  className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] focus:ring-1 focus:ring-[#1a365d] outline-none resize-none"
-                />
-              </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                      Question Prompt Text
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={selectedQuestion?.title || ''}
+                      onChange={(e) => handleUpdateSelected({ title: e.target.value })}
+                      className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] focus:ring-1 focus:ring-[#1a365d] outline-none resize-none"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
-                  Variable Name (SPSS / R Export)
-                </label>
-                <input
-                  type="text"
-                  value={selectedQuestion?.variableName || ''}
-                  onChange={(e) => handleUpdateSelected({ variableName: e.target.value })}
-                  className="w-full p-2 text-xs font-mono border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] focus:ring-1 focus:ring-[#1a365d] outline-none"
-                />
-              </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                      Variable Name (SPSS / R Export)
+                    </label>
+                    <input
+                      type="text"
+                      value={selectedQuestion?.variableName || ''}
+                      onChange={(e) => handleUpdateSelected({ variableName: e.target.value })}
+                      className="w-full p-2 text-xs font-mono border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] focus:ring-1 focus:ring-[#1a365d] outline-none"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
-                  Question Type
-                </label>
-                <select
-                  value={selectedQuestion?.type || 'multiple-choice'}
-                  onChange={(e) => handleUpdateSelected({ type: e.target.value as any })}
-                  className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
-                >
-                  <option value="multiple-choice">Multiple Choice (Single)</option>
-                  <option value="checkboxes">Checkboxes (Multi-select)</option>
-                  <option value="dropdown">Dropdown Selection</option>
-                  <option value="likert">Likert Scale</option>
-                  <option value="number">Numeric / Continuous</option>
-                  <option value="short-text">Short Text</option>
-                  <option value="paragraph">Paragraph Narrative</option>
-                  <option value="date-time">Date & Time</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Response Options */}
-            {(selectedQuestion?.type === 'multiple-choice' ||
-              selectedQuestion?.type === 'checkboxes' ||
-              selectedQuestion?.type === 'dropdown' ||
-              selectedQuestion?.type === 'likert') && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between border-b border-[#c4c6cf]/30 pb-1.5">
-                  <h3 className="text-xs font-bold text-[#002045]">Response Options</h3>
-                  <button
-                    onClick={handleAddOption}
-                    className="text-[11px] font-bold text-[#1a365d] hover:underline"
-                  >
-                    + Add Option
-                  </button>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                      Question Type
+                    </label>
+                    <select
+                      value={selectedQuestion?.type || 'multiple-choice'}
+                      onChange={(e) => handleUpdateSelected({ type: e.target.value as any })}
+                      className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
+                    >
+                      <option value="multiple-choice">Multiple Choice (Single)</option>
+                      <option value="checkboxes">Checkboxes (Multi-select)</option>
+                      <option value="dropdown">Dropdown Selection</option>
+                      <option value="likert">Likert Scale</option>
+                      <option value="number">Numeric / Continuous</option>
+                      <option value="short-text">Short Text</option>
+                      <option value="paragraph">Paragraph Narrative</option>
+                      <option value="date-time">Date & Time</option>
+                    </select>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  {selectedQuestion.options.map((opt) => (
-                    <div key={opt.id} className="flex items-center gap-1.5 group">
-                      <span className="material-symbols-outlined text-[14px] text-[#74777f] cursor-grab">
-                        drag_indicator
-                      </span>
-                      <input
-                        type="text"
-                        value={opt.label}
-                        onChange={(e) => handleUpdateOption(opt.id, e.target.value)}
-                        className="flex-1 p-1.5 text-xs border border-[#c4c6cf] rounded focus:border-[#1a365d] outline-none"
-                      />
+                {/* Response Options */}
+                {(selectedQuestion?.type === 'multiple-choice' ||
+                  selectedQuestion?.type === 'checkboxes' ||
+                  selectedQuestion?.type === 'dropdown' ||
+                  selectedQuestion?.type === 'likert') && (
+                  <div className="space-y-3 pt-2 border-t border-[#c4c6cf]/30">
+                    <div className="flex items-center justify-between pb-1.5">
+                      <h3 className="text-xs font-bold text-[#002045]">Response Options</h3>
                       <button
-                        onClick={() => handleDeleteOption(opt.id)}
-                        className="text-[#74777f] hover:text-[#ba1a1a] p-1"
+                        onClick={handleAddOption}
+                        className="text-[11px] font-bold text-[#1a365d] hover:underline"
                       >
-                        <span className="material-symbols-outlined text-[16px]">close</span>
+                        + Add Option
                       </button>
                     </div>
-                  ))}
-                </div>
+
+                    <div className="space-y-2">
+                      {selectedQuestion.options.map((opt) => (
+                        <div key={opt.id} className="flex items-center gap-1.5 group">
+                          <span className="material-symbols-outlined text-[14px] text-[#74777f] cursor-grab">
+                            drag_indicator
+                          </span>
+                          <input
+                            type="text"
+                            value={opt.label}
+                            onChange={(e) => handleUpdateOption(opt.id, e.target.value)}
+                            className="flex-1 p-1.5 text-xs border border-[#c4c6cf] rounded focus:border-[#1a365d] outline-none"
+                          />
+                          <button
+                            onClick={() => handleDeleteOption(opt.id)}
+                            className="text-[#74777f] hover:text-[#ba1a1a] p-1"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">close</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Variable Metadata & Statistical Constraints */}
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold text-[#002045] border-b border-[#c4c6cf]/30 pb-1.5">
-                Statistical Metadata & Objective Link
-              </h3>
-
+            {/* TAB 2: IF-THEN-ELSE Logic Condition Builder */}
+            {inspectorTab === 'logic' && (
               <div>
-                <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
-                  Link to Research Objective
-                </label>
-                <select
-                  value={selectedQuestion?.linkedObjective || 'Objective 1: Assess emergency medical readiness and facility distribution'}
-                  onChange={(e) => handleUpdateSelected({ linkedObjective: e.target.value })}
-                  className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
-                >
-                  <option value="Objective 1: Assess emergency medical readiness and facility distribution">
-                    Objective 1: Emergency Readiness
-                  </option>
-                  <option value="Objective 2: Evaluate socio-demographic disparities in healthcare accessibility">
-                    Objective 2: Socio-Demographic Disparities
-                  </option>
-                  <option value="Objective 3: Determine supply chain resiliency and stockout frequencies">
-                    Objective 3: Supply Chain Resiliency
-                  </option>
-                  <option value="Objective 4: Model predictors of maternal and infant primary care satisfaction">
-                    Objective 4: Patient Satisfaction Model
-                  </option>
-                </select>
+                <LogicConditionBuilder
+                  currentQuestion={selectedQuestion}
+                  allQuestions={questions}
+                  onUpdateLogic={(updatedLogic) => handleUpdateSelected({ logicRule: updatedLogic })}
+                />
               </div>
+            )}
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
-                    Data Type
-                  </label>
-                  <select
-                    value={selectedQuestion?.dataType || 'Categorical'}
-                    onChange={(e) => handleUpdateSelected({ dataType: e.target.value as DataType })}
-                    className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
-                  >
-                    <option value="Categorical">Categorical</option>
-                    <option value="Numerical">Numerical</option>
-                    <option value="Ordinal">Ordinal</option>
-                    <option value="Continuous">Continuous</option>
-                  </select>
-                </div>
+            {/* TAB 3: Statistical Metadata */}
+            {inspectorTab === 'metadata' && (
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-[#002045] border-b border-[#c4c6cf]/30 pb-1.5">
+                    Statistical Metadata & Objective Link
+                  </h3>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
-                    Measurement Level
-                  </label>
-                  <select
-                    value={selectedQuestion?.measurementLevel || 'Nominal'}
-                    onChange={(e) => handleUpdateSelected({ measurementLevel: e.target.value as MeasurementLevel })}
-                    className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
-                  >
-                    <option value="Nominal">Nominal</option>
-                    <option value="Ordinal">Ordinal</option>
-                    <option value="Interval">Interval</option>
-                    <option value="Ratio">Ratio</option>
-                  </select>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                      Variable Description / Label
+                    </label>
+                    <input
+                      type="text"
+                      value={selectedQuestion?.variableLabel || ''}
+                      onChange={(e) => handleUpdateSelected({ variableLabel: e.target.value })}
+                      placeholder="Descriptive label for data dictionary"
+                      className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                      Link to Research Objective
+                    </label>
+                    <select
+                      value={selectedQuestion?.linkedObjective || 'Objective 1: Assess emergency medical readiness and facility distribution'}
+                      onChange={(e) => handleUpdateSelected({ linkedObjective: e.target.value })}
+                      className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
+                    >
+                      <option value="Objective 1: Assess emergency medical readiness and facility distribution">
+                        Objective 1: Emergency Readiness
+                      </option>
+                      <option value="Objective 2: Evaluate socio-demographic disparities in healthcare accessibility">
+                        Objective 2: Socio-Demographic Disparities
+                      </option>
+                      <option value="Objective 3: Determine supply chain resiliency and stockout frequencies">
+                        Objective 3: Supply Chain Resiliency
+                      </option>
+                      <option value="Objective 4: Model predictors of maternal and infant primary care satisfaction">
+                        Objective 4: Patient Satisfaction Model
+                      </option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                        Data Type
+                      </label>
+                      <select
+                        value={selectedQuestion?.dataType || 'Categorical'}
+                        onChange={(e) => handleUpdateSelected({ dataType: e.target.value as DataType })}
+                        className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
+                      >
+                        <option value="Categorical">Categorical</option>
+                        <option value="Numerical">Numerical</option>
+                        <option value="Ordinal">Ordinal</option>
+                        <option value="Continuous">Continuous</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                        Measurement Level
+                      </label>
+                      <select
+                        value={selectedQuestion?.measurementLevel || 'Nominal'}
+                        onChange={(e) => handleUpdateSelected({ measurementLevel: e.target.value as MeasurementLevel })}
+                        className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
+                      >
+                        <option value="Nominal">Nominal</option>
+                        <option value="Ordinal">Ordinal</option>
+                        <option value="Interval">Interval</option>
+                        <option value="Ratio">Ratio</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {selectedQuestion?.type === 'number' && (
+                    <div className="p-3 bg-[#f1f3ff] rounded-xl border border-[#c4c6cf]/50 space-y-2">
+                      <span className="text-[11px] font-bold text-[#002045]">Numeric Boundaries</span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] text-[#43474e]">Minimum</label>
+                          <input
+                            type="number"
+                            value={selectedQuestion.validationRules?.min ?? 0}
+                            onChange={(e) =>
+                              handleUpdateSelected({
+                                validationRules: {
+                                  ...selectedQuestion.validationRules,
+                                  min: Number(e.target.value)
+                                }
+                              })
+                            }
+                            className="w-full p-1.5 text-xs bg-white border border-[#c4c6cf] rounded font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[#43474e]">Maximum</label>
+                          <input
+                            type="number"
+                            value={selectedQuestion.validationRules?.max ?? 100}
+                            onChange={(e) =>
+                              handleUpdateSelected({
+                                validationRules: {
+                                  ...selectedQuestion.validationRules,
+                                  max: Number(e.target.value)
+                                }
+                              })
+                            }
+                            className="w-full p-1.5 text-xs bg-white border border-[#c4c6cf] rounded font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Save Toast */}
       {isSavedToast && (
-        <div className="fixed bottom-6 right-6 z-[110] bg-[#002045] text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-4">
-          <span className="material-symbols-outlined text-[#91f0ed] text-[20px]">check_circle</span>
-          <span className="text-xs font-semibold">Questionnaire schema {surveyVersion} deployed to edge cache</span>
+        <div className="fixed bottom-6 right-6 z-[110] bg-[#002045] text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-4 border border-[#91f0ed]/30">
+          <span className="material-symbols-outlined text-[#91f0ed] text-[20px]">cloud_done</span>
+          <div className="text-xs">
+            <span className="font-bold block text-white">Questionnaire {surveyVersion} Saved & Deployed!</span>
+            <span className="text-[#c4c6cf] text-[11px]">Enumerators will automatically receive these questions on their next sync or login.</span>
+          </div>
         </div>
       )}
 
@@ -721,6 +1010,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       <PublicSurveyModal
         isOpen={showSurveyPreview}
         onClose={() => setShowSurveyPreview(false)}
+        questions={questions}
+        surveyTitle={surveyTitle}
       />
 
       {/* Share & Field Dispatch Modal */}
@@ -856,6 +1147,150 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                   Done
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Logic Flow Matrix & Branching Map Modal */}
+      {showLogicMatrixModal && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-[#161c27]/60 backdrop-blur-xs"
+            onClick={() => setShowLogicMatrixModal(false)}
+          />
+          <div className="relative bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden border border-[#c4c6cf]/40 animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="bg-[#4c1d95] text-white p-5 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center border border-white/20">
+                  <span className="material-symbols-outlined text-2xl text-[#d8b4fe]">alt_route</span>
+                </div>
+                <div>
+                  <h2 className="text-base font-bold tracking-tight">Survey Branching & Flow Logic Matrix</h2>
+                  <p className="text-xs text-white/80">Complete IF-THEN-ELSE execution graph for {surveyTitle}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowLogicMatrixModal(false)}
+                className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[22px]">close</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
+              <div className="flex items-center justify-between bg-[#fdf4ff] p-3 rounded-xl border border-[#d8b4fe]/60">
+                <div className="flex items-center gap-2 text-[#581c87]">
+                  <span className="material-symbols-outlined text-[20px]">info</span>
+                  <span className="font-semibold text-xs">
+                    {questionsWithLogicCount} of {questions.length} questions have conditional IF-THEN-ELSE execution branches.
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono text-[#7e22ce] bg-white px-2 py-0.5 rounded border border-[#d8b4fe]">
+                  Deterministic Evaluation
+                </span>
+              </div>
+
+              {/* Table of all questions and their logic rules */}
+              <div className="border border-[#c4c6cf]/60 rounded-xl overflow-hidden bg-white shadow-xs">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-[#f1f3ff] text-[#002045] font-bold border-b border-[#c4c6cf]/60">
+                      <th className="p-3 w-16">Item</th>
+                      <th className="p-3 w-48">Variable & Prompt</th>
+                      <th className="p-3 w-32">Status</th>
+                      <th className="p-3">Logical Expression (IF-ELIF-ELSE)</th>
+                      <th className="p-3 w-24 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#c4c6cf]/40">
+                    {questions.map((q) => {
+                      const hasLogic = q.logicRule?.enabled && q.logicRule.branches.length > 0;
+                      return (
+                        <tr
+                          key={q.id}
+                          className={`hover:bg-[#f9f9ff] transition-colors ${
+                            q.id === selectedQuestionId ? 'bg-[#f5f3ff]' : ''
+                          }`}
+                        >
+                          <td className="p-3 font-mono font-bold text-[#1a365d] align-top">
+                            {q.number}
+                          </td>
+                          <td className="p-3 align-top">
+                            <div className="font-mono font-bold text-[#002045]">{q.variableName}</div>
+                            <div className="text-[11px] text-[#43474e] line-clamp-1 mt-0.5">{q.title}</div>
+                          </td>
+                          <td className="p-3 align-top">
+                            {hasLogic ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#6b21a8]/15 text-[#6b21a8] inline-flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#6b21a8]"></span>
+                                Conditional
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#e2e8f0] text-[#64748b]">
+                                Always Visible
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 align-top">
+                            {hasLogic ? (
+                              <div className="font-mono text-[11px] text-[#4c1d95] bg-[#faf5ff] p-2 rounded border border-[#e9d5ff] space-y-1">
+                                {q.logicRule?.branches.map((b, bIdx) => (
+                                  <div key={b.id} className="flex items-start gap-1">
+                                    <span className="font-bold text-[#7e22ce] shrink-0">
+                                      {b.branchType}
+                                    </span>
+                                    {b.clauses.length > 0 ? (
+                                      <span className="text-[#3b0764]">
+                                        ({b.clauses.map(c => `${c.sourceVariable} ${c.operator} ${c.value ?? ''}`).join(` ${b.matchType} `)})
+                                      </span>
+                                    ) : null}
+                                    <span className="font-bold text-[#1a365d] shrink-0">
+                                      → {b.action.toUpperCase()}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[#74777f] text-[11px] italic">
+                                Rendered sequentially without branch gate.
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 text-right align-top">
+                            <button
+                              onClick={() => {
+                                setSelectedQuestionId(q.id);
+                                setInspectorTab('logic');
+                                setShowLogicMatrixModal(false);
+                              }}
+                              className="px-2.5 py-1 bg-[#6b21a8] hover:bg-[#581c87] text-white rounded font-semibold text-[11px] transition-colors cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-[#f9f9ff] border-t border-[#c4c6cf]/40 flex justify-between items-center shrink-0">
+              <span className="text-[11px] text-[#43474e]">
+                Logic rules are evaluated sequentially during runtime in both respondent and offline collector interfaces.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowLogicMatrixModal(false)}
+                className="px-5 py-2 bg-[#1a365d] text-white rounded-lg font-semibold hover:bg-[#002045] cursor-pointer"
+              >
+                Close Matrix
+              </button>
             </div>
           </div>
         </div>

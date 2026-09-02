@@ -61,6 +61,39 @@ export type QuestionType =
 export type DataType = 'Categorical' | 'Numerical' | 'Ordinal' | 'Continuous';
 export type MeasurementLevel = 'Nominal' | 'Ordinal' | 'Interval' | 'Ratio';
 
+export type LogicOperator =
+  | 'equals'
+  | 'not_equals'
+  | 'contains'
+  | 'greater_than'
+  | 'less_than'
+  | 'is_empty'
+  | 'is_not_empty';
+
+export type LogicAction = 'show' | 'hide' | 'skip_to' | 'require' | 'end_survey';
+
+export interface LogicClause {
+  id: string;
+  sourceVariable: string;
+  operator: LogicOperator;
+  value: any;
+}
+
+export interface LogicBranch {
+  id: string;
+  branchType: 'IF' | 'ELIF' | 'ELSE';
+  clauses: LogicClause[];
+  matchType?: 'ALL' | 'ANY';
+  action: LogicAction;
+  targetQuestionId?: string;
+  customNote?: string;
+}
+
+export interface QuestionLogicRule {
+  enabled: boolean;
+  branches: LogicBranch[];
+}
+
 export interface QuestionOption {
   id: string;
   label: string;
@@ -72,6 +105,7 @@ export interface Question {
   number: string;
   section?: string;
   title: string;
+  helpText?: string;
   variableName: string;
   variableLabel?: string;
   type: QuestionType;
@@ -83,6 +117,7 @@ export interface Question {
   dataTypeConstraint?: string;
   dataType?: DataType;
   measurementLevel?: MeasurementLevel;
+  logicRule?: QuestionLogicRule;
   validationRules?: {
     min?: number;
     max?: number;

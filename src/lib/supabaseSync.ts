@@ -2,7 +2,10 @@ import { supabase } from './supabase';
 
 export interface SyncResponsePayload {
   questionnaireId: string;
+  projectId?: string;
   enumeratorId?: string;
+  enumeratorName?: string;
+  respondentId?: string;
   answers: Record<string, any>;
   gps?: { latitude: number; longitude: number; accuracy?: number };
   batteryLevel?: number;
@@ -10,11 +13,58 @@ export interface SyncResponsePayload {
 }
 
 /**
+ * Saves response locally in rdip_collected_responses database table cache
+ */
+export function saveResponseToLocalDb(payload: SyncResponsePayload & { id?: string; syncStatus?: 'synced' | 'pending' }) {
+  try {
+    const existingStr = localStorage.getItem('rdip_collected_responses');
+    const existing: any[] = existingStr ? JSON.parse(existingStr) : [];
+    const newRecord = {
+      id: payload.id || `RESP-${Date.now().toString().slice(-6)}`,
+      questionnaireId: payload.questionnaireId || 'QNR-2024-001',
+      projectId: payload.projectId || 'PRJ-001',
+      respondentId: payload.respondentId || `RESP-${Math.floor(1000 + Math.random() * 9000)}`,
+      enumeratorId: payload.enumeratorId || 'usr-enum-01',
+      enumeratorName: payload.enumeratorName || 'Field Enumerator',
+      collectedOffline: true,
+      syncStatus: payload.syncStatus || 'pending',
+      gpsCoordinates: payload.gps,
+      batteryLevel: payload.batteryLevel ?? 95,
+      collectedAt: payload.collectedAt || new Date().toISOString(),
+      answers: payload.answers
+    };
+    
+    // Prepend new response
+    const updated = [newRecord, ...existing.filter(r => r.id !== newRecord.id)];
+    localStorage.setItem('rdip_collected_responses', JSON.stringify(updated));
+    return newRecord;
+  } catch (err) {
+    console.error('Error saving local response:', err);
+    return null;
+  }
+}
+
+/**
+ * Retrieves all stored survey responses from local database cache
+ */
+export function getStoredResponses(): any[] {
+  try {
+    const saved = localStorage.getItem('rdip_collected_responses');
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Pushes a single or batch of survey responses directly to Supabase PostgreSQL table 'responses' & 'response_answers'
  */
 export async function pushResponseToSupabase(payload: SyncResponsePayload) {
   try {
-    // 1. Insert primary response record
+    // 1. Save to local repository first
+    saveResponseToLocalDb({ ...payload, syncStatus: 'synced' });
+
+    // 2. Insert primary response record to Supabase
     const { data: responseData, error: respError } = await supabase
       .from('responses')
       .insert({
@@ -34,7 +84,7 @@ export async function pushResponseToSupabase(payload: SyncResponsePayload) {
       return { success: false, error: respError.message, localStored: true };
     }
 
-    // 2. Insert answer breakdown if questions are provided
+    // 3. Insert answer breakdown if questions are provided
     if (responseData && payload.answers) {
       const answerRows = Object.entries(payload.answers).map(([key, val]) => ({
         response_id: responseData.id,

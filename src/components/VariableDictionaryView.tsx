@@ -3,7 +3,17 @@ import { VariableDictionaryItem, DataType, MeasurementLevel } from '../types';
 import { INITIAL_VARIABLE_DICTIONARY } from '../data/mockData';
 
 export const VariableDictionaryView: React.FC = () => {
-  const [variables, setVariables] = useState<VariableDictionaryItem[]>(INITIAL_VARIABLE_DICTIONARY);
+  const [variables, setVariables] = useState<VariableDictionaryItem[]>(() => {
+    const saved = localStorage.getItem('rdip_variable_dictionary');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return INITIAL_VARIABLE_DICTIONARY;
+      }
+    }
+    return INITIAL_VARIABLE_DICTIONARY;
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDataType, setFilterDataType] = useState<string>('All');
   const [filterObjective, setFilterObjective] = useState<string>('All');
@@ -33,7 +43,9 @@ export const VariableDictionaryView: React.FC = () => {
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingVar) return;
-    setVariables(variables.map((v) => (v.id === editingVar.id ? editingVar : v)));
+    const updated = variables.map((v) => (v.id === editingVar.id ? editingVar : v));
+    setVariables(updated);
+    localStorage.setItem('rdip_variable_dictionary', JSON.stringify(updated));
     setEditingVar(null);
     setNotification(`Variable metadata for ${editingVar.variableName} updated successfully.`);
     setTimeout(() => setNotification(null), 3000);
@@ -64,7 +76,9 @@ export const VariableDictionaryView: React.FC = () => {
       valueLabels: parsedValueLabels
     };
 
-    setVariables([...variables, newVar]);
+    const updated = [...variables, newVar];
+    setVariables(updated);
+    localStorage.setItem('rdip_variable_dictionary', JSON.stringify(updated));
     setIsAddModalOpen(false);
     // Reset form
     setNewVarName('');
@@ -75,7 +89,9 @@ export const VariableDictionaryView: React.FC = () => {
 
   const handleDeleteVariable = (id: string, name: string) => {
     if (confirm(`Remove variable ${name} from data dictionary?`)) {
-      setVariables(variables.filter((v) => v.id !== id));
+      const updated = variables.filter((v) => v.id !== id);
+      setVariables(updated);
+      localStorage.setItem('rdip_variable_dictionary', JSON.stringify(updated));
       setNotification(`Variable ${name} removed.`);
       setTimeout(() => setNotification(null), 3000);
     }

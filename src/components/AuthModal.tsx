@@ -267,8 +267,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <div className="font-bold text-[#002045] text-sm truncate flex items-center gap-1.5">
                       <span>{currentUser.name}</span>
                     </div>
-                    <div className="text-[#43474e] text-[11px] truncate">{currentUser.email}</div>
-                    <div className="text-[11px] text-[#74777f] truncate">{currentUser.institution}</div>
+                    <div className="mt-0.5">
+                      <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
+                        currentUser.role === 'researcher'
+                          ? 'bg-[#1a365d]/10 text-[#1a365d] border border-[#1a365d]/20'
+                          : currentUser.role === 'admin'
+                          ? 'bg-[#371800]/15 text-[#572900] border border-[#572900]/20'
+                          : 'bg-[#006a68]/15 text-[#006a68] border border-[#006a68]/20'
+                      }`}>
+                        {currentUser.role}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-[#43474e] font-medium truncate mt-0.5" title={currentUser.institution}>
+                      {currentUser.institution}
+                    </div>
+                    <div className="text-[#74777f] text-[10px] truncate">{currentUser.email}</div>
                   </div>
                 </div>
 
