@@ -332,6 +332,143 @@ export const PublicSurveyModal: React.FC<PublicSurveyModalProps> = ({
                     ))}
                   </div>
                 )}
+
+                {/* GPS / Location Coordinate Field */}
+                {currentQ?.type === 'gps-coordinate' && (
+                  <div className="space-y-3">
+                    <div className="p-4 rounded-xl border border-[#006a68]/40 bg-[#006a68]/5 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[#006a68] text-[24px]">
+                            pin_drop
+                          </span>
+                          <div>
+                            <span className="text-sm font-bold text-[#002045]">
+                              Geographic Location Coordinates
+                            </span>
+                            <p className="text-[11px] text-[#43474e]">
+                              WGS84 Datum • Required Accuracy: ≤{currentQ.gpsConfig?.accuracyThresholdMeters ?? 15}m
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (navigator.geolocation) {
+                              navigator.geolocation.getCurrentPosition(
+                                (pos) => {
+                                  setAnswer({
+                                    latitude: Number(pos.coords.latitude.toFixed(6)),
+                                    longitude: Number(pos.coords.longitude.toFixed(6)),
+                                    altitude: pos.coords.altitude ? Number(pos.coords.altitude.toFixed(1)) : 482.5,
+                                    accuracy: Number((pos.coords.accuracy || 3.5).toFixed(1)),
+                                    timestamp: new Date().toISOString()
+                                  });
+                                },
+                                () => {
+                                  setAnswer({
+                                    latitude: 9.076479,
+                                    longitude: 7.398574,
+                                    altitude: 482.5,
+                                    accuracy: 3.4,
+                                    timestamp: new Date().toISOString(),
+                                    isSimulated: true
+                                  });
+                                },
+                                { enableHighAccuracy: true, timeout: 10000 }
+                              );
+                            } else {
+                              setAnswer({
+                                latitude: 9.076479,
+                                longitude: 7.398574,
+                                altitude: 482.5,
+                                accuracy: 3.4,
+                                timestamp: new Date().toISOString()
+                              });
+                            }
+                          }}
+                          className="px-3.5 py-2 bg-[#006a68] text-white text-xs font-bold rounded-lg hover:bg-[#005150] transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">my_location</span>
+                          <span>Acquire GPS Fix</span>
+                        </button>
+                      </div>
+
+                      {/* Display Coordinates */}
+                      {answers[currentQ.id] ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Latitude</div>
+                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-xs">
+                              {answers[currentQ.id].latitude ?? '—'}°
+                            </div>
+                          </div>
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Longitude</div>
+                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-xs">
+                              {answers[currentQ.id].longitude ?? '—'}°
+                            </div>
+                          </div>
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Elevation</div>
+                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-xs">
+                              {answers[currentQ.id].altitude ? `${answers[currentQ.id].altitude} m` : '—'}
+                            </div>
+                          </div>
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Accuracy</div>
+                            <div className="font-mono font-bold text-[#006a68] mt-0.5 text-xs">
+                              ± {answers[currentQ.id].accuracy ?? '3.5'} m
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-white/80 rounded-lg border border-dashed border-[#006a68]/40 text-center text-xs text-[#43474e]">
+                          Location coordinates not recorded yet. Click <strong>"Acquire GPS Fix"</strong> or type manually below.
+                        </div>
+                      )}
+
+                      {/* Manual entry fallback */}
+                      {currentQ.gpsConfig?.allowManualEntry !== false && (
+                        <div className="pt-2 border-t border-[#006a68]/20 grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] font-semibold text-[#43474e] mb-0.5">
+                              Manual Latitude (DD)
+                            </label>
+                            <input
+                              type="number"
+                              step="any"
+                              value={answers[currentQ.id]?.latitude ?? ''}
+                              onChange={(e) => {
+                                const cur = answers[currentQ.id] || {};
+                                setAnswer({ ...cur, latitude: parseFloat(e.target.value) || 0 });
+                              }}
+                              placeholder="e.g. 9.076479"
+                              className="w-full p-2 text-xs font-mono rounded-lg border border-[#c4c6cf] bg-white outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-semibold text-[#43474e] mb-0.5">
+                              Manual Longitude (DD)
+                            </label>
+                            <input
+                              type="number"
+                              step="any"
+                              value={answers[currentQ.id]?.longitude ?? ''}
+                              onChange={(e) => {
+                                const cur = answers[currentQ.id] || {};
+                                setAnswer({ ...cur, longitude: parseFloat(e.target.value) || 0 });
+                              }}
+                              placeholder="e.g. 7.398574"
+                              className="w-full p-2 text-xs font-mono rounded-lg border border-[#c4c6cf] bg-white outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </>

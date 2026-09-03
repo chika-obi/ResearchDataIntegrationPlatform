@@ -43,8 +43,11 @@ export interface Project {
   endDate: string;
   description: string;
   qualityScore: number;
+  notes?: string;
   ownerId?: string;
   researchObjectives?: string[];
+  category?: string;
+  leadInvestigator?: string;
 }
 
 export type QuestionType =
@@ -56,7 +59,15 @@ export type QuestionType =
   | 'matrix'
   | 'dropdown'
   | 'date-time'
-  | 'number';
+  | 'number'
+  | 'gps-coordinate';
+
+export interface QuestionGpsConfig {
+  accuracyThresholdMeters?: number; // e.g. 5, 10, 15, 25
+  requireAltitude?: boolean;
+  allowManualEntry?: boolean;
+  captureMode?: 'point' | 'facility' | 'boundary';
+}
 
 export type DataType = 'Categorical' | 'Numerical' | 'Ordinal' | 'Continuous';
 export type MeasurementLevel = 'Nominal' | 'Ordinal' | 'Interval' | 'Ratio';
@@ -123,6 +134,7 @@ export interface Question {
     max?: number;
     pattern?: string;
   };
+  gpsConfig?: QuestionGpsConfig;
 }
 
 export interface LogicDefinitionItem {

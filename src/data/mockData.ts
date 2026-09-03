@@ -42,6 +42,7 @@ export const INITIAL_PROJECTS: Project[] = [
     endDate: '2024-11-30',
     description: 'Comprehensive nationwide survey evaluating primary care clinic resource allocation, emergency medical readiness, and regional healthcare supply chains.',
     qualityScore: 94,
+    notes: 'Field protocol audited by Institutional Ethics Board (IRB #2024-88A). Wave 2 data collection expanded to 14 rural health districts in the Northern Corridor.',
     researchObjectives: [
       'Objective 1: Assess emergency medical readiness and facility distribution',
       'Objective 2: Evaluate socio-demographic disparities in healthcare accessibility',
@@ -62,6 +63,7 @@ export const INITIAL_PROJECTS: Project[] = [
     endDate: '2025-03-31',
     description: 'High-frequency multimodal transit usage assessment capturing commute delays, micro-mobility adoption, and peak-hour passenger distribution.',
     qualityScore: 88,
+    notes: 'Real-time GPS geofencing active for municipal bus depots. Enumerator shift sync scheduled twice daily at 09:00 and 17:00.',
     researchObjectives: [
       'Objective 1: Map multimodal commuter delay times across municipal sectors',
       'Objective 2: Compare fare affordability indices by income brackets',
@@ -81,6 +83,7 @@ export const INITIAL_PROJECTS: Project[] = [
     endDate: '2024-12-10',
     description: 'Smallholder crop yield analysis across arid zones assessing drought-resistant grain varieties, fertilizer access, and irrigation efficiency.',
     qualityScore: 92,
+    notes: 'Coordinated with Ministry of Agriculture extension officers. Offline field synchronization active across low-bandwidth mesh relays.',
     researchObjectives: [
       'Objective 1: Establish baseline grain yield per hectare across 5 agro-ecological zones',
       'Objective 2: Test efficacy of micro-dosing fertilizer regimens on sorghum output',
@@ -100,6 +103,7 @@ export const INITIAL_PROJECTS: Project[] = [
     endDate: '2025-06-30',
     description: 'Longitudinal study analyzing graduate employment rates and STEM curriculum alignment with regional labor market demands.',
     qualityScore: 96,
+    notes: 'Survey instrument in final pilot testing across 6 technical polytechnics. Enumerator training begins next week.',
     researchObjectives: [
       'Objective 1: Evaluate transition-to-employment duration for polytechnic graduates',
       'Objective 2: Identify industry skill gap mismatches in computational trades'
@@ -278,6 +282,28 @@ export const INITIAL_QUESTIONS: Question[] = [
     linkedObjective: 'Objective 1: Assess emergency medical readiness and facility distribution',
     dataType: 'Categorical',
     measurementLevel: 'Nominal'
+  },
+  {
+    id: 'q9',
+    number: 'Q9',
+    section: 'Section E: Geospatial & Facility Verification',
+    title: 'Record device GPS coordinates (Latitude, Longitude, Elevation) of the primary clinic entrance.',
+    variableName: 'Q9_GPS_Coordinates',
+    variableLabel: 'Facility Geospatial Coordinates (WGS84)',
+    type: 'gps-coordinate',
+    required: true,
+    options: [],
+    linkedObjective: 'Objective 1: Assess emergency medical readiness and facility distribution',
+    dataType: 'Continuous',
+    measurementLevel: 'Ratio',
+    dataTypeConstraint: 'Geospatial WGS84 (Lat, Lng, Alt, Acc)',
+    gpsConfig: {
+      accuracyThresholdMeters: 15,
+      requireAltitude: true,
+      allowManualEntry: true,
+      captureMode: 'facility'
+    },
+    validationRules: { max: 15 }
   }
 ];
 
@@ -383,6 +409,28 @@ export const INITIAL_VARIABLE_DICTIONARY: VariableDictionaryItem[] = [
     linkedObjective: 'Objective 4: Model predictors of maternal and infant primary care satisfaction',
     missingValueCode: '-999',
     questionId: 'q7',
+    valueLabels: []
+  },
+  {
+    id: 'var-8',
+    variableName: 'Q8_WASH_Infrastructure_Notes',
+    label: 'Facility WASH and Night-Shift Power Observations',
+    dataType: 'Categorical',
+    measurementLevel: 'Nominal',
+    linkedObjective: 'Objective 1: Assess emergency medical readiness and facility distribution',
+    missingValueCode: 'NONE',
+    questionId: 'q8',
+    valueLabels: []
+  },
+  {
+    id: 'var-9',
+    variableName: 'Q9_GPS_Coordinates',
+    label: 'Geospatial GPS Coordinates of Surveyed Facility (WGS84 Lat, Long, Elevation, Accuracy)',
+    dataType: 'Continuous',
+    measurementLevel: 'Ratio',
+    linkedObjective: 'Objective 1: Assess emergency medical readiness and facility distribution',
+    missingValueCode: '-999',
+    questionId: 'q9',
     valueLabels: []
   }
 ];

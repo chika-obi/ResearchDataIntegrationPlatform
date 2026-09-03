@@ -1,50 +1,68 @@
 import React, { useState } from 'react';
-import { NavSection, Project, UserProfile } from './types';
-import { INITIAL_PROJECTS, MOCK_USER_PROFILE } from './data/mockData';
-import { NavigationDrawer } from './components/NavigationDrawer';
+import { NavSection, Project, UserProfile, Question } from './types';
+import { INITIAL_PROJECTS, INITIAL_USER } from './data/mockData';
 import { TopAppBar } from './components/TopAppBar';
+import { NavigationDrawer } from './components/NavigationDrawer';
 import { BottomNavBar } from './components/BottomNavBar';
 import { DashboardView } from './components/DashboardView';
 import { ProjectsView } from './components/ProjectsView';
-import { QuestionnaireBuilderView } from './components/QuestionnaireBuilderView';
+import { QuestionnaireBuilderView, ensureQuestionsStartWithQ1 } from './components/QuestionnaireBuilderView';
 import { VariableDictionaryView } from './components/VariableDictionaryView';
 import { DataQualityView } from './components/DataQualityView';
 import { EnumeratorsView } from './components/EnumeratorsView';
-import { OfflineFieldInterface } from './components/OfflineFieldInterface';
 import { StatisticalAnalysisView } from './components/StatisticalAnalysisView';
 import { VisualizationsView } from './components/VisualizationsView';
 import { ReportsView } from './components/ReportsView';
 import { AuditSecurityView } from './components/AuditSecurityView';
 import { SettingsView } from './components/SettingsView';
 import { CreateProjectModal } from './components/CreateProjectModal';
-import { PublicSurveyModal } from './components/PublicSurveyModal';
 import { AuthModal } from './components/AuthModal';
+import { PublicSurveyModal } from './components/PublicSurveyModal';
+import { OfflineFieldInterface } from './components/OfflineFieldInterface';
 
-export default function App() {
+export function App() {
   const [currentSection, setCurrentSection] = useState<NavSection>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
-  const [showPublicSurveyModal, setShowPublicSurveyModal] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [showPublicSurveyModal, setShowPublicSurveyModal] = useState(false);
+
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('rdip_user_profile');
+    const saved = localStorage.getItem('rdip_user');
     if (saved) {
       try {
         return JSON.parse(saved);
-      } catch {
-        return MOCK_USER_PROFILE;
+      } catch (e) {
+        console.error('Failed to parse user from storage', e);
       }
     }
-    return MOCK_USER_PROFILE;
+    return INITIAL_USER;
   });
 
-  const handleUpdateUser = (updatedUser: UserProfile) => {
-    setCurrentUser(updatedUser);
-    localStorage.setItem('rdip_user_profile', JSON.stringify(updatedUser));
+  const handleUpdateUser = (updated: UserProfile) => {
+    setCurrentUser(updated);
+    localStorage.setItem('rdip_user', JSON.stringify(updated));
   };
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(INITIAL_PROJECTS[0]);
+
+  const [projects, setProjects] = useState<Project[]>(() => {
+    const saved = localStorage.getItem('rdip_projects');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to load projects from storage', e);
+      }
+    }
+    return INITIAL_PROJECTS;
+  });
+
+  const [selectedProject, setSelectedProject] = useState<Project | null>(() => {
+    return projects[0] || INITIAL_PROJECTS[0];
+  });
 
   const handleNavigate = (section: NavSection) => {
     if (section === 'public-survey') {
@@ -60,10 +78,11 @@ export default function App() {
     newProjectData: Omit<
       Project,
       'id' | 'code' | 'progress' | 'enumeratorsCount' | 'responsesCount' | 'qualityScore'
-    >
+    >,
+    templateQuestions?: Question[]
   ) => {
     const newId = (projects.length + 1).toString();
-    const newCode = `PRJ-${2024000 + projects.length + 1}`;
+    const newCode = `PRJ-${2025000 + projects.length + 1}`;
     const newProject: Project = {
       ...newProjectData,
       id: newId,
@@ -73,12 +92,33 @@ export default function App() {
       responsesCount: 0,
       qualityScore: 100
     };
-    setProjects([newProject, ...projects]);
+
+    const updatedProjects = [newProject, ...projects];
+    setProjects(updatedProjects);
     setSelectedProject(newProject);
+    localStorage.setItem('rdip_projects', JSON.stringify(updatedProjects));
+
+    // If template questions are provided, load them into questionnaire storage starting strictly with Q1
+    if (templateQuestions && templateQuestions.length > 0) {
+      const normalizedQuestions = ensureQuestionsStartWithQ1(templateQuestions);
+      localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalizedQuestions));
+      localStorage.setItem('rdip_survey_title', `${newProject.title} Questionnaire`);
+      localStorage.setItem('rdip_survey_version', 'v1.0 (Template)');
+      window.dispatchEvent(new CustomEvent('rdip_template_loaded', { detail: normalizedQuestions }));
+    }
+  };
+
+  const handleUpdateProject = (updatedProject: Project) => {
+    const updated = projects.map((p) => (p.id === updatedProject.id ? updatedProject : p));
+    setProjects(updated);
+    localStorage.setItem('rdip_projects', JSON.stringify(updated));
+    if (selectedProject?.id === updatedProject.id) {
+      setSelectedProject(updatedProject);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] text-[#161c27] flex flex-col font-sans antialiased">
+    <div className="h-screen bg-[#f9f9ff] text-[#161c27] flex flex-col font-sans antialiased overflow-hidden">
       {/* Top Header Bar */}
       <TopAppBar
         currentSection={currentSection}
@@ -95,7 +135,7 @@ export default function App() {
       />
 
       {/* Main Body Layout */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Persistent Desktop Sidebar & Mobile Drawer */}
         <NavigationDrawer
           currentSection={currentSection}
@@ -109,7 +149,13 @@ export default function App() {
         />
 
         {/* Dynamic Main Content View */}
-        <main className="flex-1 overflow-y-auto pb-20 md:pb-8">
+        <main
+          className={`flex-1 min-w-0 flex flex-col ${
+            currentSection === 'questionnaires' || currentSection === 'offline-collector'
+              ? 'overflow-hidden pb-16 md:pb-0'
+              : 'overflow-y-auto pb-20 md:pb-8'
+          }`}
+        >
           {currentSection === 'dashboard' && (
             <DashboardView
               projects={projects}
@@ -130,6 +176,7 @@ export default function App() {
               onOpenCreateProject={() => setIsCreateProjectOpen(true)}
               onNavigate={handleNavigate}
               onSelectProject={(p) => setSelectedProject(p)}
+              onUpdateProject={handleUpdateProject}
             />
           )}
 
@@ -183,17 +230,19 @@ export default function App() {
         onCreate={handleCreateProject}
       />
 
-      <PublicSurveyModal
-        isOpen={showPublicSurveyModal}
-        onClose={() => setShowPublicSurveyModal(false)}
-      />
-
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
         onUpdateUser={handleUpdateUser}
       />
+
+      <PublicSurveyModal
+        isOpen={showPublicSurveyModal}
+        onClose={() => setShowPublicSurveyModal(false)}
+      />
     </div>
   );
 }
+
+export default App;

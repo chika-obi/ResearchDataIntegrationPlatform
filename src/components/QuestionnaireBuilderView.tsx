@@ -1,11 +1,18 @@
-import React, { useState } from 'react';
-import { Question, QuestionOption, DataType, MeasurementLevel, QuestionType, QuestionLogicRule } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Question, QuestionOption, DataType, MeasurementLevel, QuestionType, QuestionLogicRule, QuestionGpsConfig } from '../types';
 import { INITIAL_QUESTIONS } from '../data/mockData';
 import { PublicSurveyModal } from './PublicSurveyModal';
 import { LogicConditionBuilder } from './LogicConditionBuilder';
 import { LogicImportExportModal } from './LogicImportExportModal';
 import { formatLogicExpression } from '../lib/surveyLogicEvaluator';
 import { downloadLogicFlowJSON } from '../lib/logicImportExport';
+
+export const ensureQuestionsStartWithQ1 = (items: Question[]): Question[] => {
+  return items.map((q, idx) => ({
+    ...q,
+    number: `Q${idx + 1}`
+  }));
+};
 
 interface QuestionnaireBuilderViewProps {
   onOpenPreview?: () => void;
@@ -16,12 +23,15 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     const saved = localStorage.getItem('rdip_active_questionnaire');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return ensureQuestionsStartWithQ1(parsed);
+        }
       } catch {
-        return INITIAL_QUESTIONS;
+        return ensureQuestionsStartWithQ1(INITIAL_QUESTIONS);
       }
     }
-    return INITIAL_QUESTIONS;
+    return ensureQuestionsStartWithQ1(INITIAL_QUESTIONS);
   });
 
   const [selectedQuestionId, setSelectedQuestionId] = useState<string>('q2');
@@ -48,14 +58,41 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [copiedFieldLink, setCopiedFieldLink] = useState(false);
   const [copiedPublicLink, setCopiedPublicLink] = useState(false);
+  const [bankSearch, setBankSearch] = useState('');
+  const [isQuestionBankOpen, setIsQuestionBankOpen] = useState(true);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [mobileActiveTab, setMobileActiveTab] = useState<'canvas' | 'bank' | 'inspector'>('canvas');
 
   const selectedQuestion = questions.find((q) => q.id === selectedQuestionId) || questions[0];
 
   const questionsWithLogicCount = questions.filter((q) => q.logicRule?.enabled && q.logicRule.branches.length > 0).length;
 
+  useEffect(() => {
+    const handleTemplateLoaded = (event: Event) => {
+      const customEvent = event as CustomEvent<Question[]>;
+      if (customEvent.detail && Array.isArray(customEvent.detail)) {
+        const normalized = ensureQuestionsStartWithQ1(customEvent.detail);
+        setQuestions(normalized);
+        if (normalized.length > 0) {
+          setSelectedQuestionId(normalized[0].id);
+        }
+        const savedTitle = localStorage.getItem('rdip_survey_title');
+        if (savedTitle) setSurveyTitle(savedTitle);
+        const savedVer = localStorage.getItem('rdip_survey_version');
+        if (savedVer) setSurveyVersion(savedVer);
+      }
+    };
+
+    window.addEventListener('rdip_template_loaded', handleTemplateLoaded);
+    return () => {
+      window.removeEventListener('rdip_template_loaded', handleTemplateLoaded);
+    };
+  }, []);
+
   const handleApplyImportedQuestions = (updatedQuestions: Question[], notificationMsg?: string) => {
-    setQuestions(updatedQuestions);
-    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updatedQuestions));
+    const normalized = ensureQuestionsStartWithQ1(updatedQuestions);
+    setQuestions(normalized);
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
     if (notificationMsg) {
       setImportToastMessage(notificationMsg);
       setTimeout(() => setImportToastMessage(null), 4000);
@@ -73,17 +110,22 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   const handleAddQuestion = (
     type: QuestionType,
     defaultTitle = 'New Questionnaire Item',
-    withDefaultLogic = false
+    withDefaultLogic = false,
+    customGpsConfig?: Partial<QuestionGpsConfig>
   ) => {
     const newId = `q-${Date.now().toString().slice(-5)}`;
-    const newNum = `Q${questions.length + 1}`;
-    const newVar = `${newNum}_Variable`;
+    const nextIndex = questions.length + 1;
+    const newNum = `Q${nextIndex}`;
+    const newVar = type === 'gps-coordinate' ? `${newNum}_GPS_Coordinates` : `${newNum}_Variable`;
 
     let defaultDataType: DataType = 'Categorical';
     let defaultMeasurement: MeasurementLevel = 'Nominal';
 
     if (type === 'number') {
       defaultDataType = 'Numerical';
+      defaultMeasurement = 'Ratio';
+    } else if (type === 'gps-coordinate') {
+      defaultDataType = 'Continuous';
       defaultMeasurement = 'Ratio';
     } else if (type === 'likert') {
       defaultDataType = 'Ordinal';
@@ -98,7 +140,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       number: newNum,
       title: defaultTitle,
       variableName: newVar,
-      variableLabel: defaultTitle,
+      variableLabel: type === 'gps-coordinate' ? 'Geospatial GPS Coordinates (WGS84)' : defaultTitle,
       type,
       required: true,
       dataType: defaultDataType,
@@ -119,9 +161,21 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
               { id: 'opt-5', label: 'Strongly Agree', numericCode: 5 }
             ]
           : [],
-      linkedObjective: 'Objective 2: Evaluate socio-demographic disparities in healthcare accessibility',
-      dataTypeConstraint: defaultDataType === 'Numerical' ? 'Numeric (Continuous)' : 'Categorical (Nominal)',
-      validationRules: type === 'number' ? { min: 0, max: 100 } : undefined,
+      linkedObjective: type === 'gps-coordinate'
+        ? 'Objective 1: Assess emergency medical readiness and facility distribution'
+        : 'Objective 2: Evaluate socio-demographic disparities in healthcare accessibility',
+      dataTypeConstraint: type === 'gps-coordinate'
+        ? 'Geospatial WGS84 (Lat, Lng, Alt, Acc)'
+        : defaultDataType === 'Numerical'
+        ? 'Numeric (Continuous)'
+        : 'Categorical (Nominal)',
+      validationRules: type === 'number' ? { min: 0, max: 100 } : type === 'gps-coordinate' ? { max: customGpsConfig?.accuracyThresholdMeters ?? 15 } : undefined,
+      gpsConfig: type === 'gps-coordinate' ? {
+        accuracyThresholdMeters: customGpsConfig?.accuracyThresholdMeters ?? 15,
+        requireAltitude: customGpsConfig?.requireAltitude ?? true,
+        allowManualEntry: customGpsConfig?.allowManualEntry ?? true,
+        captureMode: customGpsConfig?.captureMode ?? 'point'
+      } : undefined,
       logicRule: withDefaultLogic && questions.length > 0 ? {
         enabled: true,
         branches: [
@@ -149,7 +203,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       } : undefined
     };
 
-    const updated = [...questions, newQuestion];
+    const updated = ensureQuestionsStartWithQ1([...questions, newQuestion]);
     setQuestions(updated);
     setSelectedQuestionId(newId);
     if (withDefaultLogic) {
@@ -169,7 +223,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       variableName: `${target.variableName}_Copy`,
       title: `${target.title} (Duplicate)`
     };
-    const updated = [...questions, dup];
+    const updated = ensureQuestionsStartWithQ1([...questions, dup]);
     setQuestions(updated);
     setSelectedQuestionId(newId);
     localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
@@ -177,11 +231,28 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
   const handleDeleteQuestion = (id: string) => {
     if (questions.length <= 1) return;
-    const updated = questions.filter((q) => q.id !== id);
+    const filtered = questions.filter((q) => q.id !== id);
+    const updated = ensureQuestionsStartWithQ1(filtered);
     setQuestions(updated);
     if (selectedQuestionId === id) {
       setSelectedQuestionId(updated[0].id);
     }
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
+  };
+
+  const handleMoveQuestion = (index: number, direction: 'up' | 'down') => {
+    if (
+      (direction === 'up' && index === 0) ||
+      (direction === 'down' && index === questions.length - 1)
+    ) {
+      return;
+    }
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    const reordered = [...questions];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+    const updated = ensureQuestionsStartWithQ1(reordered);
+    setQuestions(updated);
     localStorage.setItem('rdip_active_questionnaire', JSON.stringify(updated));
   };
 
@@ -230,75 +301,111 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   };
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-64px)] overflow-hidden bg-[#f9f9ff]">
-      {/* Top Toolbar */}
-      <div className="h-16 border-b border-[#c4c6cf]/60 bg-white flex items-center justify-between px-4 md:px-6 shrink-0 z-10 shadow-xs">
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            value={surveyTitle}
-            onChange={(e) => setSurveyTitle(e.target.value)}
-            className="text-sm md:text-base font-bold text-[#002045] bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-[#1a365d] rounded px-1 max-w-xs md:max-w-md truncate"
-          />
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f9f9ff]">
+      {/* Primary Studio Header Bar */}
+      <div className="h-14 sm:h-16 border-b border-[#c4c6cf]/60 bg-white flex items-center justify-between px-3 sm:px-4 md:px-6 shrink-0 z-20 shadow-xs">
+        {/* Left: Survey Identity, Title and Version */}
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-[#1a365d]/10 text-[#1a365d] flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-[20px]">quiz</span>
+          </div>
 
-          <div className="flex items-center gap-1.5">
-            <select
-              value={surveyVersion}
-              onChange={(e) => setSurveyVersion(e.target.value)}
-              className="text-[11px] font-bold px-2 py-0.5 rounded bg-[#dde2f3] text-[#002045] border border-[#adc7f7] outline-none"
-            >
-              <option value="v2.0 (Active)">v2.0 (Active)</option>
-              <option value="v1.1 (Archive)">v1.1 (Archive)</option>
-              <option value="v1.0 (Baseline)">v1.0 (Baseline)</option>
-            </select>
-            <button
-              onClick={handleCreateNewVersion}
-              className="text-[10px] text-[#1a365d] hover:underline font-bold px-1"
-              title="Create new revision"
-            >
-              + Revise
-            </button>
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+            <input
+              type="text"
+              value={surveyTitle}
+              onChange={(e) => setSurveyTitle(e.target.value)}
+              title="Click to edit questionnaire title"
+              className="text-xs sm:text-sm md:text-base font-bold text-[#002045] bg-transparent border border-transparent hover:border-[#c4c6cf] focus:border-[#1a365d] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1a365d] rounded px-1.5 py-0.5 min-w-[110px] max-w-[150px] sm:max-w-[220px] md:max-w-xs lg:max-w-sm truncate transition-all"
+            />
+
+            <div className="flex items-center gap-1 shrink-0">
+              <select
+                value={surveyVersion}
+                onChange={(e) => setSurveyVersion(e.target.value)}
+                className="text-[10px] sm:text-[11px] font-bold px-1.5 sm:px-2 py-0.5 rounded bg-[#dde2f3] text-[#002045] border border-[#adc7f7] outline-none cursor-pointer"
+              >
+                <option value="v2.0 (Active)">v2.0 (Active)</option>
+                <option value="v1.1 (Archive)">v1.1 (Archive)</option>
+                <option value="v1.0 (Baseline)">v1.0 (Baseline)</option>
+              </select>
+              <button
+                onClick={handleCreateNewVersion}
+                className="text-[10px] sm:text-[11px] text-[#1a365d] hover:underline font-bold px-0.5 whitespace-nowrap"
+                title="Create new revision"
+              >
+                + Revise
+              </button>
+            </div>
+          </div>
+
+          {/* Real-time Save Status Pill */}
+          <div className="hidden xl:flex items-center gap-1 text-[11px] text-[#006a68] font-medium bg-[#91f0ed]/25 border border-[#006a68]/30 px-2 py-0.5 rounded-full shrink-0">
+            <span className="material-symbols-outlined text-[13px]">cloud_done</span>
+            <span>Saved</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Appearance Style Selector */}
-          <div className="hidden sm:flex items-center gap-1 bg-[#f1f3ff] p-1 rounded-lg border border-[#c4c6cf]/40 text-xs">
-            <button
-              onClick={() => setSurveyStyle('academic')}
-              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
-                surveyStyle === 'academic' ? 'bg-white text-[#002045] shadow-xs' : 'text-[#74777f]'
-              }`}
-            >
-              Academic
-            </button>
-            <button
-              onClick={() => setSurveyStyle('modern')}
-              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
-                surveyStyle === 'modern' ? 'bg-white text-[#002045] shadow-xs' : 'text-[#74777f]'
-              }`}
-            >
-              Modern
-            </button>
-            <button
-              onClick={() => setSurveyStyle('onepage')}
-              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors ${
-                surveyStyle === 'onepage' ? 'bg-white text-[#002045] shadow-xs' : 'text-[#74777f]'
-              }`}
-            >
-              One-Page
-            </button>
-          </div>
+        {/* Right: Primary Quick Action Controls */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            onClick={() => setIsShareModalOpen(true)}
+            className="px-2.5 sm:px-3 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap cursor-pointer"
+            title="Generate field enumerator and web survey links"
+          >
+            <span className="material-symbols-outlined text-[17px]">share</span>
+            <span className="hidden md:inline">Share</span>
+          </button>
+
+          <button
+            onClick={() => setShowSurveyPreview(true)}
+            className="px-2.5 sm:px-3 py-1.5 text-[#002045] text-xs font-semibold hover:bg-[#f1f3ff] rounded-lg transition-colors flex items-center gap-1.5 border border-[#c4c6cf] shrink-0 whitespace-nowrap cursor-pointer"
+            title="Preview survey as respondent"
+          >
+            <span className="material-symbols-outlined text-[17px]">visibility</span>
+            <span className="hidden sm:inline">Preview</span>
+          </button>
+
+          <button
+            onClick={handleSave}
+            className="px-3 sm:px-4 py-1.5 bg-[#1a365d] text-white text-xs font-semibold hover:bg-[#002045] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
+            title="Save changes and deploy version"
+          >
+            <span className="material-symbols-outlined text-[17px]">save</span>
+            <span>Save</span>
+            <span className="hidden sm:inline">& Deploy</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Studio Sub-Navigation Ribbon (Dedicated Section Views & Presets) */}
+      <div className="h-11 sm:h-12 border-b border-[#c4c6cf]/60 bg-[#f9f9ff] px-3 sm:px-4 md:px-6 flex items-center justify-between gap-2 sm:gap-4 shrink-0 z-10 select-none overflow-x-auto no-scrollbar">
+        {/* Left: View Tabs */}
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <button
+            onClick={() => setMobileActiveTab('canvas')}
+            className={`px-2.5 sm:px-3 py-1 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
+              mobileActiveTab === 'canvas'
+                ? 'bg-white text-[#002045] shadow-xs border border-[#c4c6cf]/60'
+                : 'text-[#43474e] hover:bg-[#f1f3ff]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px] text-[#1a365d]">format_list_bulleted</span>
+            <span>Questions</span>
+            <span className="bg-[#dde2f3] text-[#002045] text-[10px] font-bold px-1.5 py-0.2 rounded-full font-mono">
+              {questions.length}
+            </span>
+          </button>
 
           <button
             onClick={() => setShowLogicMatrixModal(true)}
-            className="px-3 py-1.5 bg-[#6b21a8]/10 text-[#6b21a8] border border-[#6b21a8]/30 hover:bg-[#6b21a8]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
-            title="View full questionnaire branching logic flowchart"
+            className="px-2.5 sm:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap text-[#6b21a8] bg-[#6b21a8]/10 hover:bg-[#6b21a8]/20 border border-[#6b21a8]/30 cursor-pointer"
+            title="Open complete branching logic flowchart matrix"
           >
-            <span className="material-symbols-outlined text-[18px]">alt_route</span>
-            <span className="hidden md:inline">Logic Matrix</span>
+            <span className="material-symbols-outlined text-[16px]">alt_route</span>
+            <span>Logic Matrix</span>
             {questionsWithLogicCount > 0 && (
-              <span className="bg-[#6b21a8] text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+              <span className="bg-[#6b21a8] text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full font-mono">
                 {questionsWithLogicCount}
               </span>
             )}
@@ -306,131 +413,342 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
           <button
             onClick={() => setShowLogicImportExportModal(true)}
-            className="px-3 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
-            title="Export logic flow as JSON configuration or import questionnaire logic definitions"
+            className="px-2.5 sm:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap text-[#006a68] bg-[#006a68]/10 hover:bg-[#006a68]/20 border border-[#006a68]/30 cursor-pointer"
+            title="Import or export questionnaire logic definition as JSON"
           >
-            <span className="material-symbols-outlined text-[18px]">sync_alt</span>
-            <span className="hidden md:inline">Export / Import Logic</span>
+            <span className="material-symbols-outlined text-[16px]">sync_alt</span>
+            <span className="hidden sm:inline">JSON Config</span>
+            <span className="sm:hidden">JSON</span>
           </button>
+        </div>
 
-          <button
-            onClick={() => setIsShareModalOpen(true)}
-            className="px-3.5 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            <span className="material-symbols-outlined text-[18px]">share</span>
-            <span>Share & Enumerator Link</span>
-          </button>
+        {/* Right: Layout Preset & Responsive Panel Switchers */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Appearance Style Selector */}
+          <div className="flex items-center gap-0.5 bg-white p-0.5 rounded-lg border border-[#c4c6cf]/60 text-xs shadow-xs shrink-0">
+            <button
+              onClick={() => setSurveyStyle('academic')}
+              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                surveyStyle === 'academic' ? 'bg-[#1a365d] text-white shadow-xs' : 'text-[#43474e] hover:text-[#002045]'
+              }`}
+              title="Academic Standard layout"
+            >
+              Academic
+            </button>
+            <button
+              onClick={() => setSurveyStyle('modern')}
+              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                surveyStyle === 'modern' ? 'bg-[#1a365d] text-white shadow-xs' : 'text-[#43474e] hover:text-[#002045]'
+              }`}
+              title="Modern Clean layout"
+            >
+              Modern
+            </button>
+            <button
+              onClick={() => setSurveyStyle('onepage')}
+              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                surveyStyle === 'onepage' ? 'bg-[#1a365d] text-white shadow-xs' : 'text-[#43474e] hover:text-[#002045]'
+              }`}
+              title="One-Page compact layout"
+            >
+              One-Page
+            </button>
+          </div>
 
-          <button
-            onClick={() => setShowSurveyPreview(true)}
-            className="px-3.5 py-1.5 text-[#002045] text-xs font-semibold hover:bg-[#f1f3ff] rounded-lg transition-colors flex items-center gap-1.5 border border-[#c4c6cf]"
-          >
-            <span className="material-symbols-outlined text-[18px]">visibility</span>
-            <span>Respondent Preview</span>
-          </button>
+          {/* Desktop Panel Toggles */}
+          <div className="hidden lg:flex items-center gap-1 border-l border-[#c4c6cf]/60 pl-2 shrink-0">
+            <button
+              onClick={() => setIsQuestionBankOpen(!isQuestionBankOpen)}
+              className={`p-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                isQuestionBankOpen
+                  ? 'bg-[#dde2f3] text-[#002045]'
+                  : 'text-[#74777f] hover:bg-[#f1f3ff]'
+              }`}
+              title={isQuestionBankOpen ? 'Collapse Question Bank' : 'Expand Question Bank'}
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {isQuestionBankOpen ? 'left_panel_close' : 'left_panel_open'}
+              </span>
+            </button>
 
-          <button
-            onClick={handleSave}
-            className="px-4 py-1.5 bg-[#1a365d] text-white text-xs font-semibold hover:bg-[#002045] rounded-lg transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
-          >
-            <span className="material-symbols-outlined text-[18px]">save</span>
-            <span>Save & Deploy</span>
-          </button>
+            <button
+              onClick={() => setIsInspectorOpen(!isInspectorOpen)}
+              className={`p-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                isInspectorOpen
+                  ? 'bg-[#dde2f3] text-[#002045]'
+                  : 'text-[#74777f] hover:bg-[#f1f3ff]'
+              }`}
+              title={isInspectorOpen ? 'Collapse Inspector' : 'Expand Inspector'}
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {isInspectorOpen ? 'right_panel_close' : 'right_panel_open'}
+              </span>
+            </button>
+          </div>
+
+          {/* Mobile View Switcher */}
+          <div className="flex lg:hidden items-center gap-0.5 bg-white p-0.5 rounded-lg border border-[#c4c6cf]/60 text-[11px] font-semibold shadow-xs shrink-0">
+            <button
+              onClick={() => setMobileActiveTab('bank')}
+              className={`px-2 py-0.5 rounded transition-colors whitespace-nowrap ${
+                mobileActiveTab === 'bank' ? 'bg-[#1a365d] text-white' : 'text-[#43474e]'
+              }`}
+            >
+              + Add
+            </button>
+            <button
+              onClick={() => setMobileActiveTab('canvas')}
+              className={`px-2 py-0.5 rounded transition-colors whitespace-nowrap ${
+                mobileActiveTab === 'canvas' ? 'bg-[#1a365d] text-white' : 'text-[#43474e]'
+              }`}
+            >
+              Canvas
+            </button>
+            <button
+              onClick={() => setMobileActiveTab('inspector')}
+              className={`px-2 py-0.5 rounded transition-colors whitespace-nowrap ${
+                mobileActiveTab === 'inspector' ? 'bg-[#1a365d] text-white' : 'text-[#43474e]'
+              }`}
+            >
+              Inspect
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Builder Workspace: 3 Columns */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Builder Workspace: Multi-Column Responsive Layout */}
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Left Panel: Question Bank */}
-        <div className="hidden lg:flex w-64 border-r border-[#c4c6cf]/60 bg-white flex-col shrink-0">
-          <div className="p-4 border-b border-[#c4c6cf]/40">
+        <div
+          className={`${
+            mobileActiveTab === 'bank'
+              ? 'flex w-full absolute inset-0 bg-white z-20'
+              : isQuestionBankOpen
+              ? 'hidden lg:flex w-64'
+              : 'hidden'
+          } border-r border-[#c4c6cf]/60 bg-white flex-col shrink-0 overflow-y-auto transition-all duration-200`}
+        >
+          <div className="p-3.5 border-b border-[#c4c6cf]/40 flex items-center justify-between">
             <h2 className="text-xs font-bold text-[#002045] uppercase tracking-wider flex items-center gap-1.5">
               <span className="material-symbols-outlined text-[16px] text-[#1a365d]">add_box</span>
               Question Bank
             </h2>
+            {/* Mobile Done button */}
+            <button
+              onClick={() => setMobileActiveTab('canvas')}
+              className="lg:hidden text-xs text-[#1a365d] font-semibold hover:underline flex items-center gap-0.5"
+            >
+              <span>Back to Canvas</span>
+              <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+            </button>
           </div>
           <div className="p-4 flex flex-col gap-2 overflow-y-auto">
-            <p className="text-[11px] text-[#74777f] mb-1 font-medium">Add field type to survey canvas:</p>
-
-            <button
-              onClick={() => handleAddQuestion('multiple-choice', 'Select primary category')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                radio_button_checked
+            {/* Question Bank Search */}
+            <div className="relative mb-1">
+              <span className="material-symbols-outlined absolute left-2.5 top-2 text-[#74777f] text-[15px]">
+                search
               </span>
-              <span className="text-xs font-semibold text-[#161c27]">Multiple Choice (Single)</span>
-            </button>
+              <input
+                type="text"
+                value={bankSearch}
+                onChange={(e) => setBankSearch(e.target.value)}
+                placeholder="Search types (e.g. location, GPS)..."
+                className="w-full pl-8 pr-7 py-1.5 text-xs bg-[#f9f9ff] border border-[#c4c6cf]/80 rounded-lg focus:border-[#1a365d] focus:bg-white outline-none"
+              />
+              {bankSearch && (
+                <button
+                  onClick={() => setBankSearch('')}
+                  className="absolute right-2 top-2 text-[#74777f] hover:text-[#002045]"
+                >
+                  <span className="material-symbols-outlined text-[14px]">close</span>
+                </button>
+              )}
+            </div>
 
-            <button
-              onClick={() => handleAddQuestion('checkboxes', 'Select all qualifying factors')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                check_box
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Checkboxes (Multi-select)</span>
-            </button>
+            {/* Geospatial & Coordinates Category */}
+            {(!bankSearch ||
+              'geospatial coordinates location gps latitude longitude elevation mapping site facility'
+                .toLowerCase()
+                .includes(bankSearch.toLowerCase().trim())) && (
+              <div className="pt-1 pb-2 border-b border-[#c4c6cf]/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-[#006a68] tracking-wider flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-[#006a68]">pin_drop</span>
+                    Geospatial & Location
+                  </span>
+                  <span className="bg-[#006a68]/15 text-[#006a68] text-[9px] font-bold px-1.5 py-0.2 rounded-full font-mono">
+                    WGS84 GPS
+                  </span>
+                </div>
 
-            <button
-              onClick={() => handleAddQuestion('dropdown', 'Select from standardized list')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                arrow_drop_down_circle
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Dropdown Menu</span>
-            </button>
+                <button
+                  onClick={() =>
+                    handleAddQuestion(
+                      'gps-coordinate',
+                      'Record device GPS point coordinates (Latitude, Longitude, Elevation, Accuracy) of survey location',
+                      false,
+                      { captureMode: 'point', accuracyThresholdMeters: 15, requireAltitude: true, allowManualEntry: true }
+                    )
+                  }
+                  className="w-full p-2.5 border border-[#006a68]/40 rounded-xl bg-[#006a68]/5 hover:bg-[#006a68]/10 hover:border-[#006a68] transition-all flex items-start gap-2.5 text-left group cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-lg bg-[#006a68]/20 text-[#006a68] flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="material-symbols-outlined text-[18px]">my_location</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold text-[#002045] flex items-center justify-between">
+                      <span>GPS Point / Geostamp</span>
+                      <span className="text-[9px] bg-[#006a68]/20 text-[#006a68] px-1 rounded font-mono">GNSS</span>
+                    </div>
+                    <p className="text-[10px] text-[#43474e] mt-0.5 leading-tight">
+                      Exact Lat/Long/Altitude with live satellite accuracy validation.
+                    </p>
+                  </div>
+                </button>
 
-            <button
-              onClick={() => handleAddQuestion('likert', 'Rate level of agreement')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                linear_scale
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Likert Scale (3/5/7 pt)</span>
-            </button>
+                <button
+                  onClick={() =>
+                    handleAddQuestion(
+                      'gps-coordinate',
+                      'Capture verified GPS location coordinates of the surveyed facility entrance',
+                      false,
+                      { captureMode: 'facility', accuracyThresholdMeters: 10, requireAltitude: true, allowManualEntry: true }
+                    )
+                  }
+                  className="w-full p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#006a68] transition-all flex items-start gap-2.5 text-left group cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-lg bg-[#002045]/10 text-[#002045] flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="material-symbols-outlined text-[18px]">apartment</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-[#161c27]">Facility / Site Coordinates</div>
+                    <p className="text-[10px] text-[#74777f] mt-0.5 leading-tight">
+                      Clinic, hospital, school, or waterpoint GPS pin.
+                    </p>
+                  </div>
+                </button>
 
-            <button
-              onClick={() => handleAddQuestion('number', 'Enter exact numeric count or measurement')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                pin
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Numeric / Ratio Input</span>
-            </button>
+                <button
+                  onClick={() =>
+                    handleAddQuestion(
+                      'gps-coordinate',
+                      'Record spatial GPS coordinates for surveyed household dwelling unit',
+                      false,
+                      { captureMode: 'boundary', accuracyThresholdMeters: 20, requireAltitude: false, allowManualEntry: true }
+                    )
+                  }
+                  className="w-full p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#006a68] transition-all flex items-start gap-2.5 text-left group cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-lg bg-[#002045]/10 text-[#002045] flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="material-symbols-outlined text-[18px]">cottage</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-[#161c27]">Household / Plot Geotag</div>
+                    <p className="text-[10px] text-[#74777f] mt-0.5 leading-tight">
+                      Dwelling unit or enumeration cluster spatial pin.
+                    </p>
+                  </div>
+                </button>
+              </div>
+            )}
 
-            <button
-              onClick={() => handleAddQuestion('short-text', 'Provide short single-line answer')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                short_text
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Short Text</span>
-            </button>
+            <p className="text-[11px] text-[#74777f] mb-1 font-medium">Standard question field types:</p>
 
-            <button
-              onClick={() => handleAddQuestion('paragraph', 'Provide detailed qualitative response')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                subject
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Paragraph / Narrative</span>
-            </button>
+            {(!bankSearch || 'multiple choice single radio select'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('multiple-choice', 'Select primary category')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  radio_button_checked
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Multiple Choice (Single)</span>
+              </button>
+            )}
 
-            <button
-              onClick={() => handleAddQuestion('date-time', 'Date and time of occurrence')}
-              className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group"
-            >
-              <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
-                calendar_today
-              </span>
-              <span className="text-xs font-semibold text-[#161c27]">Date & Time</span>
-            </button>
+            {(!bankSearch || 'checkboxes multi-select factors'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('checkboxes', 'Select all qualifying factors')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  check_box
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Checkboxes (Multi-select)</span>
+              </button>
+            )}
+
+            {(!bankSearch || 'dropdown menu select list'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('dropdown', 'Select from standardized list')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  arrow_drop_down_circle
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Dropdown Menu</span>
+              </button>
+            )}
+
+            {(!bankSearch || 'likert scale agreement rating'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('likert', 'Rate level of agreement')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  linear_scale
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Likert Scale (3/5/7 pt)</span>
+              </button>
+            )}
+
+            {(!bankSearch || 'numeric ratio number count measure measurement'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('number', 'Enter exact numeric count or measurement')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  pin
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Numeric / Ratio Input</span>
+              </button>
+            )}
+
+            {(!bankSearch || 'short text single line string'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('short-text', 'Provide short single-line answer')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  short_text
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Short Text</span>
+              </button>
+            )}
+
+            {(!bankSearch || 'paragraph narrative text area qualitative'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('paragraph', 'Provide detailed qualitative response')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  subject
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Paragraph / Narrative</span>
+              </button>
+            )}
+
+            {(!bankSearch || 'date time calendar clock timestamp'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() => handleAddQuestion('date-time', 'Date and time of occurrence')}
+                className="p-2.5 border border-[#c4c6cf]/60 rounded-xl bg-[#f9f9ff] hover:bg-[#f1f3ff] hover:border-[#1a365d] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#74777f] group-hover:text-[#002045] text-[18px]">
+                  calendar_today
+                </span>
+                <span className="text-xs font-semibold text-[#161c27]">Date & Time</span>
+              </button>
+            )}
 
             {/* Logical Conditions & Branching Category in Bank */}
             <div className="pt-3 mt-2 border-t border-[#c4c6cf]/40 space-y-2">
@@ -487,7 +805,11 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         </div>
 
         {/* Center Panel: Canvas */}
-        <div className="flex-1 bg-[#f1f3ff]/50 overflow-y-auto p-4 md:p-6 lg:p-8">
+        <div
+          className={`${
+            mobileActiveTab === 'canvas' ? 'flex' : 'hidden lg:flex'
+          } flex-1 min-w-0 bg-[#f1f3ff]/50 overflow-y-auto p-3 sm:p-5 md:p-6 lg:p-8`}
+        >
           <div className="max-w-3xl mx-auto flex flex-col gap-4 pb-28">
             {/* Section Header */}
             <div className="bg-white p-6 rounded-xl card-shadow border-t-4 border-[#002045] border border-[#c4c6cf]/40">
@@ -657,18 +979,101 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                         <span>YYYY-MM-DD (ISO 8601)</span>
                       </div>
                     )}
+
+                    {question.type === 'gps-coordinate' && (
+                      <div className="p-3.5 rounded-xl border border-[#006a68]/40 bg-[#006a68]/5 max-w-xl space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-lg bg-[#006a68]/15 text-[#006a68] flex items-center justify-center">
+                              <span className="material-symbols-outlined text-[20px]">pin_drop</span>
+                            </div>
+                            <div>
+                              <span className="text-xs font-bold text-[#002045]">
+                                Geospatial GPS Coordinate Capture (
+                                {question.gpsConfig?.captureMode === 'facility'
+                                  ? 'Facility / Site Pin'
+                                  : question.gpsConfig?.captureMode === 'boundary'
+                                  ? 'Household / Dwelling Geotag'
+                                  : 'Point Geostamp'}
+                                )
+                              </span>
+                              <p className="text-[10px] text-[#43474e]">
+                                WGS84 Datum (EPSG:4326) • Precision threshold: ≤{question.gpsConfig?.accuracyThresholdMeters ?? 15}m
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#006a68]/10 text-[#006a68] font-bold flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#006a68] animate-pulse"></span>
+                            GNSS READY
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Latitude</div>
+                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-[11px]">9.076479° N</div>
+                          </div>
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Longitude</div>
+                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-[11px]">7.398574° E</div>
+                          </div>
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Elevation</div>
+                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-[11px]">
+                              {question.gpsConfig?.requireAltitude !== false ? '482.5 m' : 'N/A'}
+                            </div>
+                          </div>
+                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
+                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Accuracy</div>
+                            <div className="font-mono font-bold text-[#006a68] mt-0.5 text-[11px]">± 3.2 m</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between text-[11px] pt-1 text-[#43474e] border-t border-[#006a68]/20">
+                          <span className="flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[14px] text-[#006a68]">satellite_alt</span>
+                            <span>Hardware GNSS / Geolocation Sensor</span>
+                          </span>
+                          <span className="text-[10px] text-[#74777f] font-mono">
+                            {question.gpsConfig?.allowManualEntry !== false ? 'Manual entry enabled' : 'Strict GPS sensor only'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Active Question Actions Footer */}
                   {isActive && (
-                    <div className="mt-5 pt-3 border-t border-[#c4c6cf]/40 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="mt-5 pt-3 border-t border-[#c4c6cf]/40 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleMoveQuestion(index, 'up');
+                          }}
+                          disabled={index === 0}
+                          className="p-1.5 text-[#43474e] hover:text-[#002045] hover:bg-[#f1f3ff] rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
+                          title="Move Question Up"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">arrow_upward</span>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleMoveQuestion(index, 'down');
+                          }}
+                          disabled={index === questions.length - 1}
+                          className="p-1.5 text-[#43474e] hover:text-[#002045] hover:bg-[#f1f3ff] rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
+                          title="Move Question Down"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">arrow_downward</span>
+                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDuplicateQuestion(question.id);
                           }}
-                          className="p-1.5 text-[#43474e] hover:text-[#002045] hover:bg-[#f1f3ff] rounded transition-colors"
+                          className="p-1.5 text-[#43474e] hover:text-[#002045] hover:bg-[#f1f3ff] rounded transition-colors cursor-pointer shrink-0"
                           title="Duplicate Question"
                         >
                           <span className="material-symbols-outlined text-[18px]">content_copy</span>
@@ -678,7 +1083,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                             e.stopPropagation();
                             handleDeleteQuestion(question.id);
                           }}
-                          className="p-1.5 text-[#ba1a1a] hover:bg-[#ffdad6] rounded transition-colors"
+                          className="p-1.5 text-[#ba1a1a] hover:bg-[#ffdad6] rounded transition-colors cursor-pointer shrink-0"
                           title="Delete Question"
                         >
                           <span className="material-symbols-outlined text-[18px]">delete</span>
@@ -689,8 +1094,9 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                             e.stopPropagation();
                             setSelectedQuestionId(question.id);
                             setInspectorTab('logic');
+                            setMobileActiveTab('inspector');
                           }}
-                          className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                          className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer shrink-0 ${
                             hasActiveLogic
                               ? 'bg-[#6b21a8]/15 text-[#6b21a8] hover:bg-[#6b21a8]/25'
                               : 'text-[#43474e] hover:bg-[#f1f3ff] border border-[#c4c6cf]/60'
@@ -702,7 +1108,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                         </button>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 shrink-0">
                         <span className="text-xs text-[#43474e] font-medium">Mandatory</span>
                         <button
                           type="button"
@@ -741,14 +1147,31 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         </div>
 
         {/* Right Panel: Properties Inspector */}
-        <div className="w-84 md:w-96 border-l border-[#c4c6cf]/60 bg-white flex flex-col shrink-0 overflow-y-auto">
+        <div
+          className={`${
+            mobileActiveTab === 'inspector'
+              ? 'flex w-full absolute inset-0 bg-white z-20'
+              : isInspectorOpen
+              ? 'hidden lg:flex w-80 md:w-96'
+              : 'hidden'
+          } border-l border-[#c4c6cf]/60 bg-white flex-col shrink-0 overflow-y-auto transition-all duration-200`}
+        >
           {/* Header & Tabs */}
           <div className="border-b border-[#c4c6cf]/40 bg-[#f9f9ff]">
             <div className="p-3.5 flex items-center justify-between border-b border-[#c4c6cf]/20">
-              <h2 className="text-xs font-bold text-[#002045] uppercase tracking-wider flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[16px] text-[#1a365d]">tune</span>
-                Inspector
-              </h2>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setMobileActiveTab('canvas')}
+                  className="lg:hidden p-1 -ml-1 text-[#002045] hover:bg-[#dde2f3] rounded transition-colors mr-1"
+                  title="Return to canvas"
+                >
+                  <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                </button>
+                <h2 className="text-xs font-bold text-[#002045] uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[16px] text-[#1a365d]">tune</span>
+                  Inspector
+                </h2>
+              </div>
               <span className="text-[10px] font-mono font-bold text-[#1a365d] bg-[#dde2f3] px-2 py-0.5 rounded">
                 {selectedQuestion?.number}
               </span>
@@ -758,7 +1181,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             <div className="grid grid-cols-3 p-1.5 gap-1 bg-[#f1f3ff] text-xs font-semibold">
               <button
                 onClick={() => setInspectorTab('config')}
-                className={`py-1.5 px-2 rounded-lg text-center transition-colors flex items-center justify-center gap-1 ${
+                className={`py-1.5 px-1.5 rounded-lg text-center transition-colors flex items-center justify-center gap-1 whitespace-nowrap text-[11px] sm:text-xs ${
                   inspectorTab === 'config'
                     ? 'bg-white text-[#002045] shadow-xs'
                     : 'text-[#43474e] hover:text-[#002045]'
@@ -770,7 +1193,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
               <button
                 onClick={() => setInspectorTab('logic')}
-                className={`py-1.5 px-2 rounded-lg text-center transition-colors flex items-center justify-center gap-1 relative ${
+                className={`py-1.5 px-1.5 rounded-lg text-center transition-colors flex items-center justify-center gap-1 whitespace-nowrap text-[11px] sm:text-xs relative ${
                   inspectorTab === 'logic'
                     ? 'bg-white text-[#6b21a8] font-bold shadow-xs'
                     : 'text-[#43474e] hover:text-[#6b21a8]'
@@ -785,7 +1208,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
               <button
                 onClick={() => setInspectorTab('metadata')}
-                className={`py-1.5 px-2 rounded-lg text-center transition-colors flex items-center justify-center gap-1 ${
+                className={`py-1.5 px-1.5 rounded-lg text-center transition-colors flex items-center justify-center gap-1 whitespace-nowrap text-[11px] sm:text-xs ${
                   inspectorTab === 'metadata'
                     ? 'bg-white text-[#002045] shadow-xs'
                     : 'text-[#43474e] hover:text-[#002045]'
@@ -849,9 +1272,114 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                       <option value="short-text">Short Text</option>
                       <option value="paragraph">Paragraph Narrative</option>
                       <option value="date-time">Date & Time</option>
+                      <option value="gps-coordinate">GPS / Location Coordinates</option>
                     </select>
                   </div>
                 </div>
+
+                {/* GPS / Geospatial Settings */}
+                {selectedQuestion?.type === 'gps-coordinate' && (
+                  <div className="space-y-3 pt-2 border-t border-[#c4c6cf]/30">
+                    <div className="flex items-center justify-between pb-1">
+                      <h3 className="text-xs font-bold text-[#002045] flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-[#006a68]">pin_drop</span>
+                        Geospatial & GPS Settings
+                      </h3>
+                      <span className="text-[10px] bg-[#006a68]/10 text-[#006a68] font-mono font-bold px-1.5 py-0.5 rounded">
+                        WGS84
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                        Spatial Capture Mode
+                      </label>
+                      <select
+                        value={selectedQuestion.gpsConfig?.captureMode || 'point'}
+                        onChange={(e) =>
+                          handleUpdateSelected({
+                            gpsConfig: {
+                              ...(selectedQuestion.gpsConfig || {}),
+                              captureMode: e.target.value as any
+                            }
+                          })
+                        }
+                        className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
+                      >
+                        <option value="point">Single GPS Point (Coordinates & Geostamp)</option>
+                        <option value="facility">Health Facility / Site Geolocation Pin</option>
+                        <option value="boundary">Household / Plot Boundary Geotag</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#43474e] mb-1">
+                        Required Accuracy Threshold (Meters)
+                      </label>
+                      <select
+                        value={selectedQuestion.gpsConfig?.accuracyThresholdMeters || 15}
+                        onChange={(e) =>
+                          handleUpdateSelected({
+                            gpsConfig: {
+                              ...(selectedQuestion.gpsConfig || {}),
+                              accuracyThresholdMeters: Number(e.target.value)
+                            },
+                            validationRules: {
+                              ...(selectedQuestion.validationRules || {}),
+                              max: Number(e.target.value)
+                            }
+                          })
+                        }
+                        className="w-full p-2 text-xs border border-[#c4c6cf] rounded-lg focus:border-[#1a365d] outline-none bg-white"
+                      >
+                        <option value={5}>&lt; 5m (High Precision - Survey Grade)</option>
+                        <option value={10}>&lt; 10m (Recommended Field Protocol)</option>
+                        <option value={15}>&lt; 15m (Standard Mobile GNSS)</option>
+                        <option value={25}>&lt; 25m (Permissive / Tree Canopy)</option>
+                        <option value={50}>&lt; 50m (Rural / Low Satellite Lock)</option>
+                      </select>
+                      <p className="text-[10px] text-[#74777f] mt-1">
+                        Enumerator app will warn or reject if GNSS accuracy error exceeds this limit.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <label className="flex items-center gap-2 cursor-pointer text-xs text-[#161c27]">
+                        <input
+                          type="checkbox"
+                          checked={selectedQuestion.gpsConfig?.requireAltitude !== false}
+                          onChange={(e) =>
+                            handleUpdateSelected({
+                              gpsConfig: {
+                                ...(selectedQuestion.gpsConfig || {}),
+                                requireAltitude: e.target.checked
+                              }
+                            })
+                          }
+                          className="w-4 h-4 text-[#006a68] rounded border-[#c4c6cf]"
+                        />
+                        <span>Record Altitude / Elevation above sea level</span>
+                      </label>
+
+                      <label className="flex items-center gap-2 cursor-pointer text-xs text-[#161c27]">
+                        <input
+                          type="checkbox"
+                          checked={selectedQuestion.gpsConfig?.allowManualEntry !== false}
+                          onChange={(e) =>
+                            handleUpdateSelected({
+                              gpsConfig: {
+                                ...(selectedQuestion.gpsConfig || {}),
+                                allowManualEntry: e.target.checked
+                              }
+                            })
+                          }
+                          className="w-4 h-4 text-[#006a68] rounded border-[#c4c6cf]"
+                        />
+                        <span>Allow Manual Lat/Lng Fallback (indoors / sensor failure)</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
 
                 {/* Response Options */}
                 {(selectedQuestion?.type === 'multiple-choice' ||

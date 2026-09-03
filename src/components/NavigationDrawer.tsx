@@ -96,15 +96,15 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                 onNavigate(item.id);
                 if (onCloseMobile) onCloseMobile();
               }}
-              className={`w-full text-left flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all duration-150 relative ${
+              className={`w-full text-left flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all duration-150 relative ${
                 isActive
                   ? 'text-[#002045] bg-[#e3e8f9] border-l-4 border-[#002045] font-bold shadow-xs'
                   : 'text-[#43474e] hover:bg-[#f1f3ff] hover:text-[#161c27]'
               }`}
             >
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-1.5">
                 <span
-                  className={`material-symbols-outlined text-[18px] ${
+                  className={`material-symbols-outlined text-[18px] shrink-0 ${
                     isActive ? 'fill text-[#002045]' : 'text-[#74777f]'
                   }`}
                   style={isActive ? { fontVariationSettings: "'FILL' 1" } : undefined}
@@ -116,7 +116,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
 
               {item.badge && (
                 <span
-                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                  className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
                     isActive
                       ? 'bg-[#1a365d] text-white'
                       : 'bg-[#dde2f3] text-[#002045]'
@@ -164,7 +164,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   return (
     <>
       {/* Desktop Persistent Sidebar */}
-      <aside className="hidden md:flex flex-col h-full z-30 w-[260px] shrink-0 border-r border-[#c4c6cf]/60 sticky top-16 h-[calc(100vh-4rem)]">
+      <aside className="hidden md:flex flex-col h-full z-30 w-[260px] shrink-0 border-r border-[#c4c6cf]/60 bg-[#f9f9ff] overflow-hidden">
         {drawerContent}
       </aside>
 

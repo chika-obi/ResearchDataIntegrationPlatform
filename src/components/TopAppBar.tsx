@@ -76,13 +76,13 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   ];
 
   return (
-    <header className="bg-[#f9f9ff] border-b border-[#c4c6cf]/60 h-16 flex items-center justify-between px-4 md:px-8 z-40 sticky top-0 w-full">
+    <header className="bg-[#f9f9ff] border-b border-[#c4c6cf]/60 h-16 flex items-center justify-between px-4 md:px-8 z-40 sticky top-0 w-full shrink-0">
       {/* Left side */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 shrink-0 min-w-0">
         {/* Mobile menu hamburger */}
         <button
           onClick={onOpenMobileMenu}
-          className="md:hidden text-[#002045] p-2 -ml-2 rounded-full hover:bg-[#e3e8f9] transition-colors"
+          className="md:hidden text-[#002045] p-2 -ml-2 rounded-full hover:bg-[#e3e8f9] transition-colors shrink-0"
           title="Open Menu"
         >
           <span className="material-symbols-outlined text-[24px]">menu</span>
@@ -90,7 +90,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
 
         <div
           onClick={() => onNavigate('dashboard')}
-          className="flex items-center gap-2.5 cursor-pointer"
+          className="flex items-center gap-2.5 cursor-pointer shrink-0"
         >
           <div className="w-8 h-8 rounded-lg bg-[#1a365d] text-white flex items-center justify-center font-bold text-sm shadow-xs">
             R
@@ -104,7 +104,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
         </div>
 
         {/* Section breadcrumbs (Desktop) */}
-        <div className="hidden xl:flex items-center gap-2 ml-4 text-[13px] text-[#43474e]">
+        <div className="hidden xl:flex items-center gap-2 ml-4 text-[13px] text-[#43474e] shrink-0">
           <span className="material-symbols-outlined text-[16px] text-[#74777f]">chevron_right</span>
           <span className="capitalize font-semibold text-[#002045]">
             {currentSection.replace('-', ' ')}
@@ -128,7 +128,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
       />
 
       {/* Right side tools */}
-      <div className="flex items-center gap-2.5 sm:gap-3">
+      <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
         {/* Supabase Connection Status Light Indicator */}
         <div className="relative">
           <button

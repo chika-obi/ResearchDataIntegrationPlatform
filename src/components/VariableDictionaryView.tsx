@@ -17,6 +17,7 @@ export const VariableDictionaryView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDataType, setFilterDataType] = useState<string>('All');
   const [filterObjective, setFilterObjective] = useState<string>('All');
+  const [activeTab, setActiveTab] = useState<'all' | 'nominal' | 'ordinal' | 'continuous'>('all');
   const [editingVar, setEditingVar] = useState<VariableDictionaryItem | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
@@ -37,7 +38,21 @@ export const VariableDictionaryView: React.FC = () => {
       v.linkedObjective.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = filterDataType === 'All' || v.dataType === filterDataType;
     const matchesObj = filterObjective === 'All' || v.linkedObjective.includes(filterObjective);
-    return matchesSearch && matchesType && matchesObj;
+
+    let matchesTab = true;
+    if (activeTab === 'nominal') {
+      matchesTab = v.measurementLevel === 'Nominal' || v.dataType === 'Categorical';
+    } else if (activeTab === 'ordinal') {
+      matchesTab = v.measurementLevel === 'Ordinal';
+    } else if (activeTab === 'continuous') {
+      matchesTab =
+        v.measurementLevel === 'Interval' ||
+        v.measurementLevel === 'Ratio' ||
+        v.dataType === 'Numerical' ||
+        v.dataType === 'Continuous';
+    }
+
+    return matchesSearch && matchesType && matchesObj && matchesTab;
   });
 
   const handleSaveEdit = (e: React.FormEvent) => {
@@ -123,9 +138,9 @@ export const VariableDictionaryView: React.FC = () => {
   return (
     <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded bg-[#1a365d]/10 text-[#1a365d] text-[11px] font-bold uppercase tracking-wider">
               Engine 7: Variable Dictionary & Codebook
             </span>
@@ -134,12 +149,12 @@ export const VariableDictionaryView: React.FC = () => {
           <h1 className="text-2xl md:text-3xl font-bold text-[#002045] tracking-tight mt-1">
             Variable Dictionary & Measurement Levels
           </h1>
-          <p className="text-[#43474e] text-xs md:text-sm mt-1">
+          <p className="text-[#43474e] text-xs md:text-sm mt-1 max-w-3xl">
             Standardized variable schemas, measurement scales (Nominal, Ordinal, Interval, Ratio), and value coding matrices feeding the Intelligent Statistical Engine.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             onClick={handleExportCodebook}
             className="px-3.5 py-2 rounded-lg border border-[#c4c6cf] text-[#002045] text-xs font-semibold hover:bg-white flex items-center gap-1.5 transition-colors shadow-xs"
@@ -157,6 +172,77 @@ export const VariableDictionaryView: React.FC = () => {
         </div>
       </div>
 
+      {/* Navigation Tab Bar / Views Mode */}
+      <div className="flex items-center gap-1.5 p-1 bg-[#e9ecf8]/70 border border-[#c4c6cf]/60 rounded-xl overflow-x-auto scrollbar-none text-xs font-semibold">
+        <button
+          onClick={() => setActiveTab('all')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg whitespace-nowrap transition-all ${
+            activeTab === 'all'
+              ? 'bg-white text-[#002045] shadow-xs font-bold'
+              : 'text-[#43474e] hover:text-[#002045] hover:bg-white/60'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">menu_book</span>
+          <span>All Variables</span>
+          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+            activeTab === 'all' ? 'bg-[#1a365d]/10 text-[#1a365d]' : 'bg-[#c4c6cf]/40 text-[#43474e]'
+          }`}>
+            {variables.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('nominal')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg whitespace-nowrap transition-all ${
+            activeTab === 'nominal'
+              ? 'bg-white text-[#002045] shadow-xs font-bold'
+              : 'text-[#43474e] hover:text-[#002045] hover:bg-white/60'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">category</span>
+          <span>Nominal / Categorical</span>
+          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+            activeTab === 'nominal' ? 'bg-[#1a365d]/10 text-[#1a365d]' : 'bg-[#c4c6cf]/40 text-[#43474e]'
+          }`}>
+            {variables.filter(v => v.measurementLevel === 'Nominal' || v.dataType === 'Categorical').length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('ordinal')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg whitespace-nowrap transition-all ${
+            activeTab === 'ordinal'
+              ? 'bg-white text-[#002045] shadow-xs font-bold'
+              : 'text-[#43474e] hover:text-[#002045] hover:bg-white/60'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">format_list_numbered</span>
+          <span>Ordinal (Likert)</span>
+          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+            activeTab === 'ordinal' ? 'bg-[#1a365d]/10 text-[#1a365d]' : 'bg-[#c4c6cf]/40 text-[#43474e]'
+          }`}>
+            {variables.filter(v => v.measurementLevel === 'Ordinal').length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('continuous')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg whitespace-nowrap transition-all ${
+            activeTab === 'continuous'
+              ? 'bg-white text-[#002045] shadow-xs font-bold'
+              : 'text-[#43474e] hover:text-[#002045] hover:bg-white/60'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">show_chart</span>
+          <span>Interval / Ratio (Continuous)</span>
+          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+            activeTab === 'continuous' ? 'bg-[#1a365d]/10 text-[#1a365d]' : 'bg-[#c4c6cf]/40 text-[#43474e]'
+          }`}>
+            {variables.filter(v => v.measurementLevel === 'Interval' || v.measurementLevel === 'Ratio' || v.dataType === 'Numerical' || v.dataType === 'Continuous').length}
+          </span>
+        </button>
+      </div>
+
       {/* Notification */}
       {notification && (
         <div className="p-3 bg-[#e3e8f9] border border-[#adc7f7] rounded-xl text-xs font-semibold text-[#002045] flex items-center gap-2">
@@ -165,9 +251,9 @@ export const VariableDictionaryView: React.FC = () => {
         </div>
       )}
 
-      {/* Filters & Search */}
-      <div className="bg-white rounded-xl card-shadow border border-[#c4c6cf]/40 p-4 flex flex-col md:flex-row items-center justify-between gap-3 text-xs">
-        <div className="relative w-full md:w-80">
+      {/* Filters & Search Bar */}
+      <div className="bg-white rounded-xl card-shadow border border-[#c4c6cf]/40 p-3.5 sm:p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 text-xs">
+        <div className="relative w-full xl:w-80 shrink-0">
           <span className="material-symbols-outlined absolute left-3 top-2.5 text-[#74777f] text-[18px]">
             search
           </span>
@@ -176,17 +262,25 @@ export const VariableDictionaryView: React.FC = () => {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search variable name, label, or objective..."
-            className="w-full pl-9 pr-3 py-2 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
+            className="w-full pl-9 pr-8 py-2 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] focus:ring-1 focus:ring-[#1a365d] outline-none text-xs bg-[#f9f9ff] focus:bg-white transition-colors"
           />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-2.5 top-2.5 text-[#74777f] hover:text-[#002045]"
+            >
+              <span className="material-symbols-outlined text-[16px]">close</span>
+            </button>
+          )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-[#43474e]">Data Type:</span>
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3.5 w-full xl:w-auto min-w-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="font-semibold text-[#43474e] whitespace-nowrap">Data Type:</span>
             <select
               value={filterDataType}
               onChange={(e) => setFilterDataType(e.target.value)}
-              className="p-2 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white font-medium"
+              className="p-2 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white font-medium text-xs max-w-full"
             >
               <option value="All">All Types</option>
               <option value="Categorical">Categorical</option>
@@ -196,12 +290,12 @@ export const VariableDictionaryView: React.FC = () => {
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-[#43474e]">Objective:</span>
+          <div className="flex items-center gap-2 min-w-0 shrink-0">
+            <span className="font-semibold text-[#43474e] whitespace-nowrap">Objective:</span>
             <select
               value={filterObjective}
               onChange={(e) => setFilterObjective(e.target.value)}
-              className="p-2 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white font-medium max-w-xs"
+              className="p-2 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white font-medium text-xs max-w-xs truncate"
             >
               <option value="All">All Research Objectives</option>
               <option value="Objective 1">Objective 1 (Readiness)</option>
@@ -210,13 +304,27 @@ export const VariableDictionaryView: React.FC = () => {
               <option value="Objective 4">Objective 4 (Satisfaction)</option>
             </select>
           </div>
+
+          {(searchTerm || filterDataType !== 'All' || filterObjective !== 'All' || activeTab !== 'all') && (
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setFilterDataType('All');
+                setFilterObjective('All');
+                setActiveTab('all');
+              }}
+              className="text-[#ba1a1a] hover:underline font-semibold text-[11px] px-2 py-1 rounded bg-[#ba1a1a]/5 hover:bg-[#ba1a1a]/10 whitespace-nowrap transition-colors"
+            >
+              Reset Filters
+            </button>
+          )}
         </div>
       </div>
 
       {/* Dictionary Table */}
       <div className="bg-white rounded-xl card-shadow border border-[#c4c6cf]/40 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
+          <table className="w-full min-w-[960px] text-left text-xs border-collapse">
             <thead className="bg-[#f1f3ff] border-b border-[#c4c6cf]/60 text-[#002045] font-bold">
               <tr>
                 <th className="py-3 px-4">Variable Name</th>
@@ -305,9 +413,9 @@ export const VariableDictionaryView: React.FC = () => {
 
       {/* Edit Modal */}
       {editingVar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#002045]/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-2xl border border-[#c4c6cf]/60 w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-150">
-            <div className="bg-[#1a365d] text-white p-5 flex items-center justify-between">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-[#002045]/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-[#c4c6cf]/60 w-full max-w-lg max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="bg-[#1a365d] text-white p-5 flex items-center justify-between shrink-0">
               <h3 className="font-bold text-base">Edit Variable: {editingVar.variableName}</h3>
               <button
                 onClick={() => setEditingVar(null)}
@@ -317,7 +425,7 @@ export const VariableDictionaryView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="p-6 space-y-4 text-xs">
+            <form onSubmit={handleSaveEdit} className="p-6 space-y-4 text-xs overflow-y-auto">
               <div>
                 <label className="block font-semibold text-[#161c27] mb-1">Variable Label</label>
                 <input
@@ -407,9 +515,9 @@ export const VariableDictionaryView: React.FC = () => {
 
       {/* Add Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#002045]/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-2xl border border-[#c4c6cf]/60 w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-150">
-            <div className="bg-[#1a365d] text-white p-5 flex items-center justify-between">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-[#002045]/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-[#c4c6cf]/60 w-full max-w-lg max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="bg-[#1a365d] text-white p-5 flex items-center justify-between shrink-0">
               <h3 className="font-bold text-base">Register New Variable Metadata</h3>
               <button
                 onClick={() => setIsAddModalOpen(false)}
@@ -419,7 +527,7 @@ export const VariableDictionaryView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleAddVariable} className="p-6 space-y-3.5 text-xs">
+            <form onSubmit={handleAddVariable} className="p-6 space-y-3.5 text-xs overflow-y-auto">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-[#161c27] mb-1">Variable Name (SPSS style)</label>
