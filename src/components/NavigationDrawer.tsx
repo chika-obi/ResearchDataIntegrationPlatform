@@ -22,12 +22,14 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   currentUser,
   onOpenAuthModal
 }) => {
-  const navItems: { id: NavSection; label: string; icon: string; badge?: string }[] = [
+  const isEnumerator = currentUser.role === 'enumerator';
+
+  const allNavItems: { id: NavSection; label: string; icon: string; badge?: string }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
     { id: 'projects', label: 'Projects Hub', icon: 'folder_open' },
     { id: 'questionnaires', label: 'Questionnaire Studio', icon: 'edit_note' },
     { id: 'dictionary', label: 'Variable Dictionary', icon: 'menu_book', badge: 'SPSS' },
-    { id: 'offline-collector', label: 'Offline Field Collector', icon: 'cell_tower', badge: 'PWA' },
+    { id: 'offline-collector', label: isEnumerator ? 'My Assigned Surveys' : 'Offline Field Collector', icon: 'cell_tower', badge: isEnumerator ? 'Assigned' : 'PWA' },
     { id: 'enumerators', label: 'Enumerator Operations', icon: 'groups' },
     { id: 'data-quality', label: 'Data Quality & Clean', icon: 'rule', badge: '94%' },
     { id: 'statistical-analysis', label: 'Statistical Engine', icon: 'psychology' },
@@ -36,6 +38,10 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
     { id: 'audit-security', label: 'Security & Supabase SQL', icon: 'security' },
     { id: 'settings', label: 'Settings & Encryption', icon: 'settings' }
   ];
+
+  const navItems = isEnumerator
+    ? allNavItems.filter((item) => item.id === 'offline-collector' || item.id === 'settings')
+    : allNavItems;
 
   const drawerContent = (
     <div className="flex flex-col h-full bg-[#f9f9ff] text-[#161c27] select-none">
@@ -84,6 +90,13 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
           </button>
         </div>
       </div>
+
+      {isEnumerator && (
+        <div className="mx-3 mt-2 p-2 bg-[#006a68]/10 border border-[#006a68]/20 rounded-lg text-[11px] text-[#006a68] flex items-center gap-2">
+          <span className="material-symbols-outlined text-[16px] shrink-0">verified_user</span>
+          <span className="leading-tight font-medium">RLS Enforced: Restricted to assigned field questionnaires only.</span>
+        </div>
+      )}
 
       {/* Navigation Links */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">

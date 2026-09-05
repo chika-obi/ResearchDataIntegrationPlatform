@@ -1,6 +1,342 @@
-import React, { useState } from 'react';
-import { UserProfile, UserRole } from '../types';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import type { UserProfile, UserRole } from '../types';
+
+/**
+ * RDIP AUTHENTICATION & SESSION MANAGEMENT
+ *
+ * SECURITY RULES:
+ * 1. Supabase Auth is the source of identity.
+ * 2. public.profiles is the source of the user's RDIP role.
+ * 3. The frontend must never grant a privileged role by itself.
+ * 4. Suspended/inactive users must not enter the platform.
+ * 5. Enumerators are authenticated exactly like other users,
+ *    but their database permissions are controlled by RLS.
+ */
+
+/**
+ * Sign in an existing RDIP user.
+ */
+export async function signInRDIP(
+  email: string,
+  password: string,
+  currentUser: UserProfile
+): Promise<UserProfile> {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!normalizedEmail) {
+    throw new Error('Please enter your email address.');
+  }
+
+  if (!password) {
+    throw new Error('Please enter your password.');
+  }
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: normalizedEmail,
+    password
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data.user) {
+    throw new Error('Authentication failed. No user session was created.');
+  }
+
+  /*
+   * IMPORTANT:
+   *
+   * Never use a role supplied by the frontend.
+   * Always retrieve the role from public.profiles.
+   */
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', data.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    await supabase.auth.signOut();
+
+    throw new Error(
+      'Your account is authenticated, but your RDIP profile could not be found. Please contact the administrator.'
+    );
+  }
+
+  /*
+   * Account status is controlled by the database.
+   */
+  if (profile.status !== 'active') {
+    await supabase.auth.signOut();
+
+    throw new Error(
+      `Your RDIP account is currently ${String(profile.status).replace(
+        /_/g,
+        ' '
+      )}. Please contact the administrator.`
+    );
+  }
+
+  /*
+   * Map the database role to the application's existing role type.
+   *
+   * The database remains authoritative.
+   */
+  const applicationRole: UserRole =
+    profile.role === 'super_admin'
+      ? 'admin'
+      : (profile.role as UserRole);
+
+  const authenticatedUser: UserProfile = {
+    ...currentUser,
+    id: data.user.id,
+    name: profile.full_name || currentUser.name,
+    email: profile.email || normalizedEmail,
+    institution: profile.institution || 'Research Institute',
+    department: profile.department || '',
+    avatar: profile.avatar_url || currentUser.avatar,
+    role: applicationRole
+  };
+
+  return authenticatedUser;
+}
+
+/**
+ * Create a normal RDIP account.
+ *
+ * IMPORTANT:
+ * The frontend is NOT allowed to create super_admin,
+ * analyst, or other privileged accounts simply by selecting a role.
+ *
+ * The database trigger remains responsible for authoritative
+ * role provisioning.
+ */
+export async function signUpRDIP(
+  name: string,
+  email: string,
+  password: string,
+  institution: string,
+  selectedRole: UserRole
+): Promise<{
+  user: UserProfile | null;
+  requiresEmailConfirmation: boolean;
+}> {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!name.trim()) {
+    throw new Error('Please enter your full name.');
+  }
+
+  if (!normalizedEmail) {
+    throw new Error('Please enter your email address.');
+  }
+
+  if (!password) {
+    throw new Error('Please enter a password.');
+  }
+
+  if (password.length < 8) {
+    throw new Error('Password must contain at least 8 characters.');
+  }
+
+  /*
+   * Only researcher and enumerator can be requested from the
+   * public registration interface.
+   *
+   * NEVER accept "admin" or "super_admin" from the browser.
+   */
+  const requestedRole =
+    selectedRole === 'enumerator'
+      ? 'enumerator'
+      : 'researcher';
+
+  const { data, error } = await supabase.auth.signUp({
+    email: normalizedEmail,
+    password,
+    options: {
+      data: {
+        full_name: name.trim(),
+        institution: institution.trim() || 'Research Institute',
+        role: requestedRole
+      }
+    }
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data.user) {
+    throw new Error('Account creation failed. No user was returned.');
+  }
+
+  /*
+   * Supabase may require email verification.
+   */
+  if (!data.session) {
+    return {
+      user: null,
+      requiresEmailConfirmation: true
+    };
+  }
+
+  /*
+   * Retrieve the authoritative profile created by the
+   * handle_new_user() database trigger.
+   */
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', data.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    await supabase.auth.signOut();
+
+    throw new Error(
+      'Account created, but the RDIP profile could not be loaded. Please contact the administrator.'
+    );
+  }
+
+  if (profile.status !== 'active') {
+    await supabase.auth.signOut();
+
+    throw new Error(
+      `Your RDIP account is currently ${String(profile.status).replace(/_/g, ' ')}.`
+    );
+  }
+
+  const applicationRole: UserRole =
+    profile.role === 'super_admin'
+      ? 'admin'
+      : (profile.role as UserRole);
+
+  const authenticatedUser: UserProfile = {
+    id: data.user.id,
+    name: profile.full_name || name.trim(),
+    email: profile.email || normalizedEmail,
+    institution: profile.institution || institution.trim() || 'Research Institute',
+    department: profile.department || '',
+    avatar: profile.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    role: applicationRole,
+    timezone: 'UTC+01:00 (WAT)',
+    version: '1.0'
+  };
+
+  return {
+    user: authenticatedUser,
+    requiresEmailConfirmation: false
+  };
+}
+
+/**
+ * Get the currently authenticated RDIP user.
+ *
+ * This should be called when the application starts or
+ * when the browser refreshes.
+ */
+export async function getCurrentRDIPUser(
+  currentUser: UserProfile
+): Promise<UserProfile | null> {
+  const {
+    data: { session },
+    error
+  } = await supabase.auth.getSession();
+
+  if (error) {
+    console.error('RDIP session error:', error);
+    return null;
+  }
+
+  if (!session?.user) {
+    return null;
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', session.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    console.error('RDIP profile lookup failed:', profileError);
+    await supabase.auth.signOut();
+    return null;
+  }
+
+  /*
+   * Never allow an inactive account to remain logged in.
+   */
+  if (profile.status !== 'active') {
+    await supabase.auth.signOut();
+    return null;
+  }
+
+  const applicationRole: UserRole =
+    profile.role === 'super_admin'
+      ? 'admin'
+      : (profile.role as UserRole);
+
+  return {
+    ...currentUser,
+    id: session.user.id,
+    name: profile.full_name || currentUser.name,
+    email: profile.email || session.user.email || currentUser.email,
+    institution: profile.institution || 'Research Institute',
+    department: profile.department || '',
+    avatar: profile.avatar_url || currentUser.avatar,
+    role: applicationRole
+  };
+}
+
+/**
+ * Sign out completely from the RDIP application.
+ */
+export async function signOutRDIP(): Promise<void> {
+  const { error } = await supabase.auth.signOut();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Listen for real Supabase authentication changes.
+ *
+ * The application should use this to keep its local user state
+ * synchronized with the actual Supabase session.
+ */
+export function subscribeToRDIPAuth(
+  callback: (
+    user: {
+      id: string;
+      email?: string;
+    } | null
+  ) => void
+) {
+  const {
+    data: { subscription }
+  } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (session?.user) {
+      callback({
+        id: session.user.id,
+        email: session.user.email
+      });
+    } else {
+      callback(null);
+    }
+  });
+
+  return () => {
+    subscription.unsubscribe();
+  };
+}
+
+/* ==============================================================================
+ * AUTH MODAL COMPONENT
+ * ============================================================================== */
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -15,26 +351,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   currentUser,
   onUpdateUser
 }) => {
-  const [authMode, setAuthMode] = useState<'switch-role' | 'edit-profile' | 'login' | 'signup' | 'forgot'>('switch-role');
+  const [authMode, setAuthMode] = useState<
+    'switch-role' | 'edit-profile' | 'login' | 'signup' | 'forgot'
+  >('switch-role');
   const [email, setEmail] = useState(currentUser.email);
-  const [password, setPassword] = useState('••••••••');
+  const [password, setPassword] = useState('');
   const [name, setName] = useState(currentUser.name);
   const [institution, setInstitution] = useState(currentUser.institution);
-  const [department, setDepartment] = useState(currentUser.department || 'Department of Demography & Social Statistics');
+  const [department, setDepartment] = useState(
+    currentUser.department || 'Department of Demography & Social Statistics'
+  );
   const [avatar, setAvatar] = useState(currentUser.avatar);
   const [selectedRole, setSelectedRole] = useState<UserRole>(currentUser.role);
-  const [notification, setNotification] = useState<{ message: string; isError?: boolean } | null>(null);
+  const [notification, setNotification] = useState<{
+    message: string;
+    isError?: boolean;
+  } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // Sync state when currentUser changes or modal opens
-  React.useEffect(() => {
+  useEffect(() => {
     if (isOpen) {
       setName(currentUser.name);
       setEmail(currentUser.email);
       setInstitution(currentUser.institution);
-      setDepartment(currentUser.department || 'Department of Demography & Social Statistics');
+      setDepartment(
+        currentUser.department || 'Department of Demography & Social Statistics'
+      );
       setAvatar(currentUser.avatar);
       setSelectedRole(currentUser.role);
+      setPassword('');
+      setNotification(null);
     }
   }, [isOpen, currentUser]);
 
@@ -45,7 +392,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        setNotification({ message: 'Image size should be under 5MB.', isError: true });
+        setNotification({
+          message: 'Image size should be under 5MB.',
+          isError: true
+        });
         return;
       }
       const reader = new FileReader();
@@ -53,7 +403,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (event.target?.result) {
           const newAvatar = event.target.result as string;
           setAvatar(newAvatar);
-          setNotification({ message: 'Photo loaded! Click "Save Profile Changes" to apply.' });
+          setNotification({
+            message: 'Photo loaded! Click "Save Profile Changes" to apply.'
+          });
           setTimeout(() => setNotification(null), 3000);
         }
       };
@@ -73,7 +425,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       role: selectedRole
     };
     onUpdateUser(updated);
-    setNotification({ message: 'Profile information & image updated successfully!' });
+    setNotification({
+      message: 'Profile information & image updated successfully!'
+    });
     setTimeout(() => {
       setNotification(null);
       setAuthMode('switch-role');
@@ -83,36 +437,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setNotification(null);
 
     try {
-      // Attempt live Supabase Auth sign-in if real password entered
-      if (password && password !== '••••••••') {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password
+      if (password) {
+        const authenticatedUser = await signInRDIP(email, password, currentUser);
+        onUpdateUser(authenticatedUser);
+        setNotification({
+          message: `Authenticated successfully as ${authenticatedUser.name} (${authenticatedUser.role}).`
         });
-        if (error) {
-          console.warn('Supabase Auth response:', error.message);
-        }
+        setTimeout(() => {
+          setNotification(null);
+          onClose();
+        }, 1200);
+      } else {
+        // Fallback for simulation / offline demo if no password entered
+        onUpdateUser({
+          ...currentUser,
+          email,
+          name: name || email.split('@')[0].replace('.', ' ').toUpperCase(),
+          role: selectedRole
+        });
+        setNotification({ message: 'Session updated.' });
+        setTimeout(() => {
+          setNotification(null);
+          onClose();
+        }, 1000);
       }
-
-      onUpdateUser({
-        ...currentUser,
-        email,
-        name: name || email.split('@')[0].replace('.', ' ').toUpperCase(),
-        role: selectedRole
-      });
-      setNotification({ message: 'Authenticated successfully with Supabase Auth.' });
-      setTimeout(() => {
-        setNotification(null);
-        onClose();
-      }, 1200);
-    } catch (err: any) {
-      setNotification({ message: err?.message || 'Login completed.', isError: false });
-      setTimeout(() => {
-        setNotification(null);
-        onClose();
-      }, 1200);
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : 'Login failed. Please verify credentials.';
+      setNotification({ message: errorMessage, isError: true });
     } finally {
       setIsLoading(false);
     }
@@ -121,44 +476,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setNotification(null);
 
     try {
-      if (password && password !== '••••••••') {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: name,
-              institution,
-              role: selectedRole
-            }
-          }
-        });
-        if (error) {
-          console.warn('Supabase sign up warning:', error.message);
-        }
-      }
-
-      onUpdateUser({
-        ...currentUser,
-        id: `usr-${Date.now().toString().slice(-4)}`,
+      const result = await signUpRDIP(
         name,
         email,
+        password,
         institution,
-        role: selectedRole
-      });
-      setNotification({ message: 'Account registered and session established with Supabase Auth.' });
-      setTimeout(() => {
-        setNotification(null);
-        onClose();
-      }, 1200);
-    } catch (err: any) {
-      setNotification({ message: err?.message || 'Registration completed.' });
-      setTimeout(() => {
-        setNotification(null);
-        onClose();
-      }, 1200);
+        selectedRole
+      );
+
+      if (result.requiresEmailConfirmation) {
+        setNotification({
+          message:
+            'Registration successful! Please check your email to confirm your account.'
+        });
+        setTimeout(() => {
+          setNotification(null);
+          setAuthMode('login');
+        }, 3000);
+      } else if (result.user) {
+        onUpdateUser(result.user);
+        setNotification({
+          message:
+            'Account registered and authenticated successfully with Supabase Auth.'
+        });
+        setTimeout(() => {
+          setNotification(null);
+          onClose();
+        }, 1200);
+      }
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : 'Registration failed. Please try again.';
+      setNotification({ message: errorMessage, isError: true });
     } finally {
       setIsLoading(false);
     }
@@ -170,25 +524,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       ...currentUser,
       role
     });
-    setNotification({ message: `Switched active profile role to ${role.toUpperCase()}.` });
+    setNotification({
+      message: `Active persona switched to ${role.toUpperCase()}. UI access rules updated.`
+    });
     setTimeout(() => setNotification(null), 2000);
   };
 
   const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setNotification(null);
 
     try {
-      await supabase.auth.resetPasswordForEmail(email);
-      setNotification({ message: `Password reset instructions dispatched to ${email}.` });
-    } catch {
-      setNotification({ message: `Password reset instructions dispatched to ${email}.` });
+      await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
+      setNotification({
+        message: `Password reset instructions dispatched to ${email}.`
+      });
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : 'Password reset failed.';
+      setNotification({ message: errorMessage, isError: true });
     } finally {
       setIsLoading(false);
       setTimeout(() => {
         setNotification(null);
         setAuthMode('login');
-      }, 2200);
+      }, 2500);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setIsLoading(true);
+    try {
+      await signOutRDIP();
+      setNotification({ message: 'Signed out successfully.' });
+      setTimeout(() => {
+        setNotification(null);
+        onClose();
+      }, 1000);
+    } catch {
+      setNotification({ message: 'Signed out locally.' });
+      setTimeout(() => {
+        setNotification(null);
+        onClose();
+      }, 1000);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -225,11 +606,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 {authMode === 'forgot' && 'Reset Supabase Password'}
               </h2>
               <p className="text-xs text-white/80 mt-0.5">
-                {authMode === 'switch-role' && 'Switch between Researcher, Enumerator, and Admin views'}
-                {authMode === 'edit-profile' && 'Customize your name, institution, and profile photo'}
-                {authMode === 'login' && 'Supabase Auth & Row-Level Security (RLS)'}
-                {authMode === 'signup' && 'Register new institutional researcher account'}
-                {authMode === 'forgot' && 'Send password reset link to your email'}
+                {authMode === 'switch-role' &&
+                  'Switch between Researcher, Enumerator, and Admin views'}
+                {authMode === 'edit-profile' &&
+                  'Customize your name, institution, and profile photo'}
+                {authMode === 'login' &&
+                  'Supabase Auth & Row-Level Security (RLS)'}
+                {authMode === 'signup' &&
+                  'Register new institutional researcher account'}
+                {authMode === 'forgot' &&
+                  'Send password reset link to your email'}
               </p>
             </div>
           </div>
@@ -237,11 +623,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Feedback alert */}
         {notification && (
-          <div className={`mx-6 mt-4 p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
-            notification.isError
-              ? 'bg-[#ffdad6] border border-[#ba1a1a]/30 text-[#93000a]'
-              : 'bg-[#91f0ed]/30 border border-[#006a68]/40 text-[#006e6d]'
-          }`}>
+          <div
+            className={`mx-6 mt-4 p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
+              notification.isError
+                ? 'bg-[#ffdad6] border border-[#ba1a1a]/30 text-[#93000a]'
+                : 'bg-[#91f0ed]/30 border border-[#006a68]/40 text-[#006e6d]'
+            }`}
+          >
             <span className="material-symbols-outlined text-[18px]">
               {notification.isError ? 'error' : 'check_circle'}
             </span>
@@ -268,20 +656,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <span>{currentUser.name}</span>
                     </div>
                     <div className="mt-0.5">
-                      <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
-                        currentUser.role === 'researcher'
-                          ? 'bg-[#1a365d]/10 text-[#1a365d] border border-[#1a365d]/20'
-                          : currentUser.role === 'admin'
-                          ? 'bg-[#371800]/15 text-[#572900] border border-[#572900]/20'
-                          : 'bg-[#006a68]/15 text-[#006a68] border border-[#006a68]/20'
-                      }`}>
+                      <span
+                        className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
+                          currentUser.role === 'researcher'
+                            ? 'bg-[#1a365d]/10 text-[#1a365d] border border-[#1a365d]/20'
+                            : currentUser.role === 'admin'
+                            ? 'bg-[#371800]/15 text-[#572900] border border-[#572900]/20'
+                            : 'bg-[#006a68]/15 text-[#006a68] border border-[#006a68]/20'
+                        }`}
+                      >
                         {currentUser.role}
                       </span>
                     </div>
-                    <div className="text-[11px] text-[#43474e] font-medium truncate mt-0.5" title={currentUser.institution}>
+                    <div
+                      className="text-[11px] text-[#43474e] font-medium truncate mt-0.5"
+                      title={currentUser.institution}
+                    >
                       {currentUser.institution}
                     </div>
-                    <div className="text-[#74777f] text-[10px] truncate">{currentUser.email}</div>
+                    <div className="text-[#74777f] text-[10px] truncate">
+                      {currentUser.email}
+                    </div>
                   </div>
                 </div>
 
@@ -292,7 +687,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   title="Edit details & upload photo"
                 >
                   <span className="material-symbols-outlined text-[15px]">edit</span>
-                  <span>Edit Info</span>
+                  <span>Edit</span>
                 </button>
               </div>
 
@@ -300,11 +695,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <label className="text-xs font-bold text-[#002045] uppercase tracking-wider">
-                    Select Active Persona / Role
+                    Simulate / Switch Active Persona
                   </label>
-                  <span className="text-[11px] text-[#74777f]">Simulates role view</span>
+                  <span className="text-[11px] text-[#74777f]">Test RLS rules</span>
                 </div>
-                
+
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
@@ -315,7 +710,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         : 'bg-white text-[#43474e] border-[#c4c6cf] hover:bg-[#f1f3ff]'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-xl block mb-1">psychology</span>
+                    <span className="material-symbols-outlined text-xl block mb-1">
+                      psychology
+                    </span>
                     <span className="text-xs font-bold block">Researcher</span>
                     <span className="text-[10px] opacity-80 block">Full Suite</span>
                   </button>
@@ -329,7 +726,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         : 'bg-white text-[#43474e] border-[#c4c6cf] hover:bg-[#f1f3ff]'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-xl block mb-1">cell_tower</span>
+                    <span className="material-symbols-outlined text-xl block mb-1">
+                      cell_tower
+                    </span>
                     <span className="text-xs font-bold block">Enumerator</span>
                     <span className="text-[10px] opacity-80 block">Offline Field</span>
                   </button>
@@ -343,33 +742,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         : 'bg-white text-[#43474e] border-[#c4c6cf] hover:bg-[#f1f3ff]'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-xl block mb-1">admin_panel_settings</span>
+                    <span className="material-symbols-outlined text-xl block mb-1">
+                      admin_panel_settings
+                    </span>
                     <span className="text-xs font-bold block">Admin</span>
                     <span className="text-[10px] opacity-80 block">Audit & SQL</span>
                   </button>
                 </div>
 
-                <div className="mt-2.5 p-2 bg-[#f9f9ff] border border-[#c4c6cf]/30 rounded-lg text-[11px] text-[#43474e] leading-snug">
+                <div className="mt-2.5 p-2.5 bg-[#f9f9ff] border border-[#c4c6cf]/30 rounded-lg text-[11px] text-[#43474e] leading-snug">
                   {currentUser.role === 'researcher' && (
-                    <span>🎓 <strong>Researcher View:</strong> Author survey forms, build variable codebooks, run statistical inference ($\chi^2$, ANOVA), and generate Chapter 4 reports.</span>
+                    <span>
+                      🎓 <strong>Researcher View:</strong> Author survey forms, build variable
+                      codebooks, run statistical inference, and generate Chapter 4 reports.
+                    </span>
                   )}
                   {currentUser.role === 'enumerator' && (
-                    <span>📱 <strong>Enumerator View:</strong> Collect survey data in the offline PWA, capture GPS/battery telemetry, and sync encrypted batch submissions.</span>
+                    <span>
+                      📱 <strong>Enumerator View:</strong> Collect survey data in the offline PWA,
+                      capture GPS/battery telemetry, and sync encrypted batch submissions.
+                    </span>
                   )}
                   {currentUser.role === 'admin' && (
-                    <span>🛡️ <strong>Admin View:</strong> Monitor full audit trails, evaluate Row-Level Security (RLS) rules, and export Supabase PostgreSQL schemas.</span>
+                    <span>
+                      🛡️ <strong>Admin View:</strong> Monitor full audit trails, evaluate Row-Level
+                      Security (RLS) rules, and export Supabase PostgreSQL schemas.
+                    </span>
                   )}
                 </div>
               </div>
 
+              {/* Action buttons */}
               <div className="pt-2 border-t border-[#c4c6cf]/40 flex justify-between items-center text-xs">
-                <button
-                  type="button"
-                  onClick={() => setAuthMode('login')}
-                  className="text-[#1a365d] font-semibold hover:underline"
-                >
-                  Supabase Sign In
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('login')}
+                    className="text-[#1a365d] font-semibold hover:underline"
+                  >
+                    Supabase Sign In
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    disabled={isLoading}
+                    className="text-[#ba1a1a] font-semibold hover:underline"
+                  >
+                    Sign Out
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={onClose}
@@ -401,7 +823,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <label className="cursor-pointer px-3 py-1.5 bg-[#1a365d] text-white rounded-lg font-semibold text-[11px] hover:bg-[#002045] transition-colors inline-flex items-center gap-1 shadow-2xs">
                       <span className="material-symbols-outlined text-[14px]">upload</span>
-                      <span>Upload My Image</span>
+                      <span>Upload Photo</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -412,35 +834,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setAvatar('https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80')}
+                      onClick={() =>
+                        setAvatar(
+                          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
+                        )
+                      }
                       className="px-2 py-1 bg-white border border-[#c4c6cf] text-[#43474e] rounded text-[11px] hover:bg-slate-50"
-                      title="Set female researcher avatar"
+                      title="Preset Avatar 1"
                     >
                       Preset 1
                     </button>
                     <button
                       type="button"
-                      onClick={() => setAvatar('https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80')}
+                      onClick={() =>
+                        setAvatar(
+                          'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
+                        )
+                      }
                       className="px-2 py-1 bg-white border border-[#c4c6cf] text-[#43474e] rounded text-[11px] hover:bg-slate-50"
-                      title="Set male researcher avatar"
+                      title="Preset Avatar 2"
                     >
                       Preset 2
                     </button>
                   </div>
-                  <p className="text-[10px] text-[#74777f]">Supports PNG, JPG, WebP from your computer</p>
+                  <p className="text-[10px] text-[#74777f]">
+                    Supports PNG, JPG, WebP from your computer
+                  </p>
                 </div>
               </div>
 
               {/* Editable Fields */}
               <div className="space-y-3">
                 <div>
-                  <label className="block font-semibold text-[#161c27] mb-1">Full Name / Academic Title</label>
+                  <label className="block font-semibold text-[#161c27] mb-1">
+                    Full Name / Title
+                  </label>
                   <input
                     type="text"
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Dr. Chikaobi Kpanuku"
+                    placeholder="e.g. Dr. Chika Obi"
                     className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
                   />
                 </div>
@@ -452,44 +886,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="e.g. kpanukuchikaobi@gmail.com"
+                    placeholder="e.g. researcher@rdip.org"
                     className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-[#161c27] mb-1">Research Institution / University</label>
+                  <label className="block font-semibold text-[#161c27] mb-1">
+                    Research Institution / University
+                  </label>
                   <input
                     type="text"
                     required
                     value={institution}
                     onChange={(e) => setInstitution(e.target.value)}
-                    placeholder="e.g. University / Research Institute"
+                    placeholder="e.g. Institute for Health Demographics"
                     className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-[#161c27] mb-1">Department / Research Division</label>
+                  <label className="block font-semibold text-[#161c27] mb-1">
+                    Department / Division
+                  </label>
                   <input
                     type="text"
                     value={department}
                     onChange={(e) => setDepartment(e.target.value)}
-                    placeholder="e.g. Department of Demography & Social Statistics"
+                    placeholder="e.g. Department of Epidemiological Surveillance"
                     className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-[#161c27] mb-1">Default Persona Role</label>
+                  <label className="block font-semibold text-[#161c27] mb-1">Role Designation</label>
                   <select
                     value={selectedRole}
                     onChange={(e) => setSelectedRole(e.target.value as UserRole)}
                     className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white"
                   >
-                    <option value="researcher">Researcher (Full Analytics & Authoring)</option>
+                    <option value="researcher">Researcher (Authoring & Analytics)</option>
                     <option value="enumerator">Enumerator (Field Response Collector)</option>
-                    <option value="admin">System Administrator (Audit & Schema Access)</option>
+                    <option value="admin">Administrator (System Governance)</option>
                   </select>
                 </div>
               </div>
@@ -508,7 +946,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   className="px-4 py-2 bg-[#006a68] text-white rounded-lg font-semibold hover:bg-[#004f4e] shadow-xs flex items-center gap-1.5 transition-colors"
                 >
                   <span className="material-symbols-outlined text-[16px]">check</span>
-                  <span>Save Profile & Apply Changes</span>
+                  <span>Save Profile</span>
                 </button>
               </div>
             </form>
@@ -525,7 +963,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
-                  placeholder="researcher@institution.edu"
+                  placeholder="lead.researcher@rdip.org"
                 />
               </div>
 
@@ -542,24 +980,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
                 <input
                   type="password"
-                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your password"
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
                 />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-[#161c27] mb-1">Role Authorization</label>
-                <select
-                  value={selectedRole}
-                  onChange={(e) => setSelectedRole(e.target.value as UserRole)}
-                  className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white"
-                >
-                  <option value="researcher">Researcher (Full Analytics & Authoring)</option>
-                  <option value="enumerator">Enumerator (Field Response Collector)</option>
-                  <option value="admin">System Administrator (Audit & Schema Access)</option>
-                </select>
               </div>
 
               <button
@@ -569,7 +994,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               >
                 {isLoading ? (
                   <>
-                    <span className="material-symbols-outlined text-[16px] animate-spin">refresh</span>
+                    <span className="material-symbols-outlined text-[16px] animate-spin">
+                      refresh
+                    </span>
                     <span>Authenticating...</span>
                   </>
                 ) : (
@@ -577,14 +1004,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 )}
               </button>
 
-              <div className="pt-2 text-center text-[11px] text-[#43474e]">
-                Need a new account?{' '}
+              <div className="pt-2 flex justify-between items-center text-[11px] text-[#43474e]">
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('switch-role')}
+                  className="text-[#43474e] hover:underline"
+                >
+                  Back to Role Switcher
+                </button>
                 <button
                   type="button"
                   onClick={() => setAuthMode('signup')}
                   className="text-[#1a365d] font-bold hover:underline"
                 >
-                  Register Institution
+                  Create Account
                 </button>
               </div>
             </form>
@@ -601,12 +1034,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
-                  placeholder="Prof. Chika Obi"
+                  placeholder="Dr. Chika Obi"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-[#161c27] mb-1">Institutional Email</label>
+                <label className="block font-semibold text-[#161c27] mb-1">
+                  Institutional Email
+                </label>
                 <input
                   type="email"
                   required
@@ -625,24 +1060,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
-                  placeholder="Min. 8 characters"
+                  placeholder="Minimum 8 characters"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-[#161c27] mb-1">Research Institution</label>
+                <label className="block font-semibold text-[#161c27] mb-1">
+                  Research Institution
+                </label>
                 <input
                   type="text"
                   required
                   value={institution}
                   onChange={(e) => setInstitution(e.target.value)}
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
-                  placeholder="University of Nigeria / NIH"
+                  placeholder="African Institute for Health Demographics"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-[#161c27] mb-1">Primary Role</label>
+                <label className="block font-semibold text-[#161c27] mb-1">Requested Role</label>
                 <select
                   value={selectedRole}
                   onChange={(e) => setSelectedRole(e.target.value as UserRole)}
@@ -650,33 +1087,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 >
                   <option value="researcher">Researcher</option>
                   <option value="enumerator">Enumerator</option>
-                  <option value="admin">Administrator</option>
                 </select>
+                <span className="text-[10px] text-[#74777f] mt-1 block">
+                  Admin roles cannot be self-requested and require database provisioning.
+                </span>
               </div>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-2.5 rounded-lg bg-[#006a68] text-white font-semibold hover:bg-[#002045] transition-colors shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-2.5 rounded-lg bg-[#006a68] text-white font-semibold hover:bg-[#004f4e] transition-colors shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isLoading ? (
                   <>
-                    <span className="material-symbols-outlined text-[16px] animate-spin">refresh</span>
-                    <span>Creating Account...</span>
+                    <span className="material-symbols-outlined text-[16px] animate-spin">
+                      refresh
+                    </span>
+                    <span>Registering...</span>
                   </>
                 ) : (
-                  'Create Account & Apply RLS Policy'
+                  'Create Institutional Account'
                 )}
               </button>
 
-              <div className="pt-1 text-center text-[11px] text-[#43474e]">
-                Already have credentials?{' '}
+              <div className="pt-1 flex justify-between items-center text-[11px] text-[#43474e]">
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('switch-role')}
+                  className="text-[#43474e] hover:underline"
+                >
+                  Back to Role Switcher
+                </button>
                 <button
                   type="button"
                   onClick={() => setAuthMode('login')}
                   className="text-[#1a365d] font-bold hover:underline"
                 >
-                  Sign In
+                  Sign In Instead
                 </button>
               </div>
             </form>
@@ -686,7 +1133,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           {authMode === 'forgot' && (
             <form onSubmit={handleForgotSubmit} className="space-y-4 text-xs">
               <p className="text-[#43474e] text-xs">
-                Enter your institutional email address. Supabase Auth will transmit a cryptographic magic link to reset your credentials.
+                Enter your institutional email address. Supabase Auth will transmit a
+                cryptographic password reset link.
               </p>
               <div>
                 <label className="block font-semibold text-[#161c27] mb-1">Email Address</label>
@@ -696,6 +1144,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
+                  placeholder="researcher@rdip.org"
                 />
               </div>
 
@@ -706,11 +1155,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               >
                 {isLoading ? (
                   <>
-                    <span className="material-symbols-outlined text-[16px] animate-spin">refresh</span>
+                    <span className="material-symbols-outlined text-[16px] animate-spin">
+                      refresh
+                    </span>
                     <span>Transmitting Link...</span>
                   </>
                 ) : (
-                  'Send Password Reset Email'
+                  'Send Password Reset Link'
                 )}
               </button>
 
@@ -730,4 +1181,3 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     </div>
   );
 };
-

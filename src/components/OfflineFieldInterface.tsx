@@ -365,13 +365,20 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
     <div className="max-w-[1050px] mx-auto p-4 md:p-8 space-y-6 animate-in fade-in duration-200">
       {/* Top Banner Mode Indicator */}
       <div className="flex items-center justify-between">
-        <button
-          onClick={onReturnToHub}
-          className="text-xs font-semibold text-[#1a365d] hover:underline flex items-center gap-1 cursor-pointer"
-        >
-          <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-          <span>Return to Research Web Portal</span>
-        </button>
+        {currentUser?.role !== 'enumerator' ? (
+          <button
+            onClick={onReturnToHub}
+            className="text-xs font-semibold text-[#1a365d] hover:underline flex items-center gap-1 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px]">arrow_back</span>
+            <span>Return to Research Web Portal</span>
+          </button>
+        ) : (
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-[#006a68] bg-[#006a68]/10 px-2.5 py-1 rounded-full border border-[#006a68]/20">
+            <span className="material-symbols-outlined text-[15px]">assignment_turned_in</span>
+            <span>Field Collector Mode: Assigned Instruments Only</span>
+          </div>
+        )}
 
         <button
           onClick={handleToggleNetwork}

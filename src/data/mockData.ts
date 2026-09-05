@@ -290,7 +290,7 @@ export const INITIAL_QUESTIONS: Question[] = [
     title: 'Record device GPS coordinates (Latitude, Longitude, Elevation) of the primary clinic entrance.',
     variableName: 'Q9_GPS_Coordinates',
     variableLabel: 'Facility Geospatial Coordinates (WGS84)',
-    type: 'gps-coordinate',
+    type: 'geolocation',
     required: true,
     options: [],
     linkedObjective: 'Objective 1: Assess emergency medical readiness and facility distribution',

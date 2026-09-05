@@ -127,7 +127,20 @@ export async function verifySupabaseTablesExist(): Promise<{
   tableStatus: Record<string, boolean>;
   message: string;
 }> {
-  const tables = ['projects', 'questionnaires', 'questions', 'responses', 'response_answers', 'audit_logs', 'project_enumerators'];
+  const tables = [
+    'profiles',
+    'projects',
+    'project_members',
+    'questionnaires',
+    'questionnaire_versions',
+    'questions',
+    'question_options',
+    'variables',
+    'questionnaire_assignments',
+    'responses',
+    'response_answers',
+    'audit_logs',
+  ];
   const tableStatus: Record<string, boolean> = {};
   let anyExist = false;
 

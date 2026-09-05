@@ -89,7 +89,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
         </button>
 
         <div
-          onClick={() => onNavigate('dashboard')}
+          onClick={() => onNavigate(currentUser.role === 'enumerator' ? 'offline-collector' : 'dashboard')}
           className="flex items-center gap-2.5 cursor-pointer shrink-0"
         >
           <div className="w-8 h-8 rounded-lg bg-[#1a365d] text-white flex items-center justify-center font-bold text-sm shadow-xs">
@@ -98,7 +98,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
           <div>
             <span className="text-[19px] font-black text-[#002045] tracking-tight">RDIP</span>
             <span className="hidden sm:inline-block ml-2 text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-[#1a365d]/10 text-[#1a365d]">
-              Research Intelligence
+              {currentUser.role === 'enumerator' ? 'Field Terminal' : 'Research Intelligence'}
             </span>
           </div>
         </div>
@@ -107,7 +107,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
         <div className="hidden xl:flex items-center gap-2 ml-4 text-[13px] text-[#43474e] shrink-0">
           <span className="material-symbols-outlined text-[16px] text-[#74777f]">chevron_right</span>
           <span className="capitalize font-semibold text-[#002045]">
-            {currentSection.replace('-', ' ')}
+            {currentUser.role === 'enumerator' ? 'Assigned Field Surveys' : currentSection.replace('-', ' ')}
           </span>
           {isOfflineMode && (
             <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#ba1a1a]/10 text-[#ba1a1a] border border-[#ba1a1a]/20">
@@ -118,14 +118,21 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
         </div>
       </div>
 
-      {/* Global Quick Search Bar */}
-      <GlobalSearchBar
-        projects={projects}
-        onNavigate={onNavigate}
-        onSelectProject={onSelectProject}
-        onSelectEnumerator={onSelectEnumerator}
-        onSelectQuestion={onSelectQuestion}
-      />
+      {/* Global Quick Search Bar (Disabled for enumerators to enforce strict multi-project isolation) */}
+      {currentUser.role !== 'enumerator' ? (
+        <GlobalSearchBar
+          projects={projects}
+          onNavigate={onNavigate}
+          onSelectProject={onSelectProject}
+          onSelectEnumerator={onSelectEnumerator}
+          onSelectQuestion={onSelectQuestion}
+        />
+      ) : (
+        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#dde2f3]/40 border border-[#c4c6cf]/40 text-xs text-[#002045]">
+          <span className="material-symbols-outlined text-[16px] text-[#006a68]">lock</span>
+          <span className="font-medium">Isolated Field Session: {currentUser.name}</span>
+        </div>
+      )}
 
       {/* Right side tools */}
       <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">

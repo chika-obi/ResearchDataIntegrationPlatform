@@ -10,8 +10,12 @@ interface CreateProjectModalProps {
       Project,
       'id' | 'code' | 'progress' | 'enumeratorsCount' | 'responsesCount' | 'qualityScore'
     >,
-    templateQuestions?: Question[]
-  ) => void;
+    templateQuestions?: Question[],
+    extraMetadata?: {
+      researchTopic?: string;
+      researchDesign?: string;
+    }
+  ) => Promise<{ success: boolean; error?: string; project?: Project }> | void;
 }
 
 export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
@@ -32,6 +36,9 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     SURVEY_TEMPLATES[0].researchObjectives
   );
   const [showQuestionPreview, setShowQuestionPreview] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -44,6 +51,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     setDescription(template.description);
     setNotes(template.defaultNotes);
     setResearchObjectives(template.researchObjectives);
+    setSubmitError(null);
   };
 
   const handleSwitchToBlank = () => {
@@ -54,30 +62,52 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
     setDescription('');
     setNotes('');
     setResearchObjectives([]);
+    setSubmitError(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !institution.trim()) return;
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
 
     const chosenQuestions =
       activeMode === 'template' && currentTemplate ? currentTemplate.questions : undefined;
 
-    onCreate(
-      {
-        title: title.trim(),
-        institution: institution.trim(),
-        startDate,
-        endDate: endDate || '2025-12-31',
-        description: description.trim() || 'New research initiative.',
-        notes: notes.trim() || undefined,
-        status: status as any,
-        researchObjectives: researchObjectives.length > 0 ? researchObjectives : undefined
-      },
-      chosenQuestions
-    );
+    try {
+      const res = await onCreate(
+        {
+          title: title.trim(),
+          institution: institution.trim(),
+          startDate,
+          endDate: endDate || '2025-12-31',
+          description: description.trim() || 'New research initiative.',
+          notes: notes.trim() || undefined,
+          status: status as any,
+          researchObjectives: researchObjectives.length > 0 ? researchObjectives : undefined
+        },
+        chosenQuestions,
+        {
+          researchTopic: currentTemplate?.category,
+          researchDesign: currentTemplate?.name
+        }
+      );
 
-    onClose();
+      if (res && !res.success) {
+        setSubmitError(res.error || 'Failed to create project in Supabase database.');
+      } else {
+        setSubmitSuccess('Research initiative successfully registered in Supabase database!');
+        setTimeout(() => {
+          onClose();
+        }, 900);
+      }
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Network error while attempting to connect to Supabase.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -149,6 +179,28 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
 
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5">
+          {/* Supabase Error Alert */}
+          {submitError && (
+            <div className="p-3.5 bg-[#ba1a1a]/10 border border-[#ba1a1a]/30 rounded-xl text-xs text-[#ba1a1a] flex items-start gap-2.5 animate-in fade-in">
+              <span className="material-symbols-outlined text-[20px] text-[#ba1a1a] shrink-0">error</span>
+              <div className="flex-1">
+                <p className="font-bold text-[13px] text-[#ba1a1a]">Supabase Database Error</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-[#410002]">{submitError}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Supabase Success Alert */}
+          {submitSuccess && (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl text-xs text-emerald-800 flex items-center gap-2.5 animate-in fade-in">
+              <span className="material-symbols-outlined text-[20px] text-emerald-600 shrink-0">check_circle</span>
+              <div className="flex-1">
+                <p className="font-bold text-[13px] text-emerald-900">Success</p>
+                <p className="mt-0.5 text-xs text-emerald-700">{submitSuccess}</p>
+              </div>
+            </div>
+          )}
+
           {/* Template Selection Grid when in Template Mode */}
           {activeMode === 'template' && (
             <div className="space-y-2.5">
@@ -351,16 +403,31 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-[#002045] border border-[#c4c6cf] hover:bg-[#f1f3ff] transition-colors cursor-pointer"
+                disabled={isSubmitting}
+                className={`px-4 py-2 rounded-xl text-xs font-semibold text-[#002045] border border-[#c4c6cf] hover:bg-[#f1f3ff] transition-colors ${
+                  isSubmitting ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                }`}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-[#1a365d] hover:bg-[#002045] text-white transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                disabled={isSubmitting}
+                className={`px-5 py-2 rounded-xl text-xs font-bold bg-[#1a365d] hover:bg-[#002045] text-white transition-all shadow-xs flex items-center gap-1.5 ${
+                  isSubmitting ? 'opacity-70 cursor-wait' : 'cursor-pointer'
+                }`}
               >
-                <span className="material-symbols-outlined text-[16px]">check_circle</span>
-                <span>Create Project</span>
+                {isSubmitting ? (
+                  <>
+                    <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                    <span>Saving to Supabase...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                    <span>Create Project</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

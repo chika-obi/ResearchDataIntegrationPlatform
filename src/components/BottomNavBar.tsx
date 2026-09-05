@@ -1,20 +1,28 @@
 import React from 'react';
-import { NavSection } from '../types';
+import { NavSection, UserProfile } from '../types';
 
 interface BottomNavBarProps {
   currentSection: NavSection;
   onNavigate: (section: NavSection) => void;
+  currentUser?: UserProfile;
 }
 
-export const BottomNavBar: React.FC<BottomNavBarProps> = ({ currentSection, onNavigate }) => {
-  // Mobile nav maps to 5 primary actions as shown in mobile mockups
-  const items: { id: NavSection; label: string; icon: string; aliases?: NavSection[] }[] = [
-    { id: 'dashboard', label: 'Home', icon: 'home' },
-    { id: 'projects', label: 'Projects', icon: 'folder' },
-    { id: 'questionnaires', label: 'Build', icon: 'add_circle' },
-    { id: 'statistical-analysis', label: 'Stats', icon: 'analytics', aliases: ['statistical-analysis', 'visualizations', 'data-quality'] },
-    { id: 'settings', label: 'Settings', icon: 'settings' }
-  ];
+export const BottomNavBar: React.FC<BottomNavBarProps> = ({ currentSection, onNavigate, currentUser }) => {
+  const isEnumerator = currentUser?.role === 'enumerator';
+
+  // Mobile nav items based on role
+  const items: { id: NavSection; label: string; icon: string; aliases?: NavSection[] }[] = isEnumerator
+    ? [
+        { id: 'offline-collector', label: 'Field Surveys', icon: 'cell_tower' },
+        { id: 'settings', label: 'Settings', icon: 'settings' }
+      ]
+    : [
+        { id: 'dashboard', label: 'Home', icon: 'home' },
+        { id: 'projects', label: 'Projects', icon: 'folder' },
+        { id: 'questionnaires', label: 'Build', icon: 'add_circle' },
+        { id: 'statistical-analysis', label: 'Stats', icon: 'analytics', aliases: ['statistical-analysis', 'visualizations', 'data-quality'] },
+        { id: 'settings', label: 'Settings', icon: 'settings' }
+      ];
 
   return (
     <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-2 md:hidden bg-[#f9f9ff] shadow-[0_-1px_3px_rgba(0,0,0,0.1)] border-t border-[#c4c6cf]/40 rounded-t-xl">

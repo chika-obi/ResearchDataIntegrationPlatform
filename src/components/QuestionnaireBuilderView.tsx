@@ -6,6 +6,7 @@ import { LogicConditionBuilder } from './LogicConditionBuilder';
 import { LogicImportExportModal } from './LogicImportExportModal';
 import { formatLogicExpression } from '../lib/surveyLogicEvaluator';
 import { downloadLogicFlowJSON } from '../lib/logicImportExport';
+import { GeolocationFieldRenderer } from './GeolocationFieldRenderer';
 
 export const ensureQuestionsStartWithQ1 = (items: Question[]): Question[] => {
   return items.map((q, idx) => ({
@@ -116,7 +117,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     const newId = `q-${Date.now().toString().slice(-5)}`;
     const nextIndex = questions.length + 1;
     const newNum = `Q${nextIndex}`;
-    const newVar = type === 'gps-coordinate' ? `${newNum}_GPS_Coordinates` : `${newNum}_Variable`;
+    const isGeo = type === 'geolocation' || type === 'gps-coordinate';
+    const newVar = isGeo ? `${newNum}_Geolocation_Coords` : `${newNum}_Variable`;
 
     let defaultDataType: DataType = 'Categorical';
     let defaultMeasurement: MeasurementLevel = 'Nominal';
@@ -124,7 +126,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     if (type === 'number') {
       defaultDataType = 'Numerical';
       defaultMeasurement = 'Ratio';
-    } else if (type === 'gps-coordinate') {
+    } else if (isGeo) {
       defaultDataType = 'Continuous';
       defaultMeasurement = 'Ratio';
     } else if (type === 'likert') {
@@ -140,7 +142,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       number: newNum,
       title: defaultTitle,
       variableName: newVar,
-      variableLabel: type === 'gps-coordinate' ? 'Geospatial GPS Coordinates (WGS84)' : defaultTitle,
+      variableLabel: isGeo ? 'Geospatial Geolocation Coordinates (WGS84)' : defaultTitle,
       type,
       required: true,
       dataType: defaultDataType,
@@ -161,16 +163,16 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
               { id: 'opt-5', label: 'Strongly Agree', numericCode: 5 }
             ]
           : [],
-      linkedObjective: type === 'gps-coordinate'
+      linkedObjective: isGeo
         ? 'Objective 1: Assess emergency medical readiness and facility distribution'
         : 'Objective 2: Evaluate socio-demographic disparities in healthcare accessibility',
-      dataTypeConstraint: type === 'gps-coordinate'
+      dataTypeConstraint: isGeo
         ? 'Geospatial WGS84 (Lat, Lng, Alt, Acc)'
         : defaultDataType === 'Numerical'
         ? 'Numeric (Continuous)'
         : 'Categorical (Nominal)',
-      validationRules: type === 'number' ? { min: 0, max: 100 } : type === 'gps-coordinate' ? { max: customGpsConfig?.accuracyThresholdMeters ?? 15 } : undefined,
-      gpsConfig: type === 'gps-coordinate' ? {
+      validationRules: type === 'number' ? { min: 0, max: 100 } : isGeo ? { max: customGpsConfig?.accuracyThresholdMeters ?? 15 } : undefined,
+      gpsConfig: isGeo ? {
         accuracyThresholdMeters: customGpsConfig?.accuracyThresholdMeters ?? 15,
         requireAltitude: customGpsConfig?.requireAltitude ?? true,
         allowManualEntry: customGpsConfig?.allowManualEntry ?? true,
@@ -567,14 +569,14 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
             {/* Geospatial & Coordinates Category */}
             {(!bankSearch ||
-              'geospatial coordinates location gps latitude longitude elevation mapping site facility'
+              'geospatial coordinates location gps geolocation latitude longitude elevation mapping site facility'
                 .toLowerCase()
                 .includes(bankSearch.toLowerCase().trim())) && (
               <div className="pt-1 pb-2 border-b border-[#c4c6cf]/40 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] uppercase font-bold text-[#006a68] tracking-wider flex items-center gap-1">
                     <span className="material-symbols-outlined text-[14px] text-[#006a68]">pin_drop</span>
-                    Geospatial & Location
+                    Geospatial & Geolocation
                   </span>
                   <span className="bg-[#006a68]/15 text-[#006a68] text-[9px] font-bold px-1.5 py-0.2 rounded-full font-mono">
                     WGS84 GPS
@@ -584,8 +586,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                 <button
                   onClick={() =>
                     handleAddQuestion(
-                      'gps-coordinate',
-                      'Record device GPS point coordinates (Latitude, Longitude, Elevation, Accuracy) of survey location',
+                      'geolocation',
+                      'Capture current device geolocation coordinates (Latitude, Longitude, Altitude, Accuracy) with live visual map',
                       false,
                       { captureMode: 'point', accuracyThresholdMeters: 15, requireAltitude: true, allowManualEntry: true }
                     )
@@ -597,11 +599,11 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-bold text-[#002045] flex items-center justify-between">
-                      <span>GPS Point / Geostamp</span>
-                      <span className="text-[9px] bg-[#006a68]/20 text-[#006a68] px-1 rounded font-mono">GNSS</span>
+                      <span>Geolocation API Capture</span>
+                      <span className="text-[9px] bg-[#006a68]/20 text-[#006a68] px-1 rounded font-mono">LIVE API</span>
                     </div>
                     <p className="text-[10px] text-[#43474e] mt-0.5 leading-tight">
-                      Exact Lat/Long/Altitude with live satellite accuracy validation.
+                      Real-time device GNSS coordinates with interactive map & radar visualizer.
                     </p>
                   </div>
                 </button>
@@ -609,8 +611,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                 <button
                   onClick={() =>
                     handleAddQuestion(
-                      'gps-coordinate',
-                      'Capture verified GPS location coordinates of the surveyed facility entrance',
+                      'geolocation',
+                      'Record verified geolocation pin coordinates of the surveyed healthcare facility or site entrance',
                       false,
                       { captureMode: 'facility', accuracyThresholdMeters: 10, requireAltitude: true, allowManualEntry: true }
                     )
@@ -621,7 +623,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                     <span className="material-symbols-outlined text-[18px]">apartment</span>
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-semibold text-[#161c27]">Facility / Site Coordinates</div>
+                    <div className="text-xs font-semibold text-[#161c27]">Facility / Site Geolocation</div>
                     <p className="text-[10px] text-[#74777f] mt-0.5 leading-tight">
                       Clinic, hospital, school, or waterpoint GPS pin.
                     </p>
@@ -631,8 +633,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                 <button
                   onClick={() =>
                     handleAddQuestion(
-                      'gps-coordinate',
-                      'Record spatial GPS coordinates for surveyed household dwelling unit',
+                      'geolocation',
+                      'Record spatial geolocation coordinates for surveyed household dwelling unit',
                       false,
                       { captureMode: 'boundary', accuracyThresholdMeters: 20, requireAltitude: false, allowManualEntry: true }
                     )
@@ -653,6 +655,25 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             )}
 
             <p className="text-[11px] text-[#74777f] mb-1 font-medium">Standard question field types:</p>
+
+            {(!bankSearch || 'geolocation gps location coordinates map'.includes(bankSearch.toLowerCase())) && (
+              <button
+                onClick={() =>
+                  handleAddQuestion(
+                    'geolocation',
+                    'Record current geolocation coordinates',
+                    false,
+                    { captureMode: 'point', accuracyThresholdMeters: 15, requireAltitude: true, allowManualEntry: true }
+                  )
+                }
+                className="p-2.5 border border-[#006a68]/40 rounded-xl bg-[#006a68]/5 hover:bg-[#006a68]/10 hover:border-[#006a68] transition-all flex items-center gap-2.5 text-left group cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[#006a68] group-hover:text-[#002045] text-[18px]">
+                  pin_drop
+                </span>
+                <span className="text-xs font-bold text-[#002045]">Geolocation (GPS & Map)</span>
+              </button>
+            )}
 
             {(!bankSearch || 'multiple choice single radio select'.includes(bankSearch.toLowerCase())) && (
               <button
@@ -980,65 +1001,12 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                       </div>
                     )}
 
-                    {question.type === 'gps-coordinate' && (
-                      <div className="p-3.5 rounded-xl border border-[#006a68]/40 bg-[#006a68]/5 max-w-xl space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-lg bg-[#006a68]/15 text-[#006a68] flex items-center justify-center">
-                              <span className="material-symbols-outlined text-[20px]">pin_drop</span>
-                            </div>
-                            <div>
-                              <span className="text-xs font-bold text-[#002045]">
-                                Geospatial GPS Coordinate Capture (
-                                {question.gpsConfig?.captureMode === 'facility'
-                                  ? 'Facility / Site Pin'
-                                  : question.gpsConfig?.captureMode === 'boundary'
-                                  ? 'Household / Dwelling Geotag'
-                                  : 'Point Geostamp'}
-                                )
-                              </span>
-                              <p className="text-[10px] text-[#43474e]">
-                                WGS84 Datum (EPSG:4326) • Precision threshold: ≤{question.gpsConfig?.accuracyThresholdMeters ?? 15}m
-                              </p>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#006a68]/10 text-[#006a68] font-bold flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#006a68] animate-pulse"></span>
-                            GNSS READY
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
-                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
-                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Latitude</div>
-                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-[11px]">9.076479° N</div>
-                          </div>
-                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
-                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Longitude</div>
-                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-[11px]">7.398574° E</div>
-                          </div>
-                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
-                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Elevation</div>
-                            <div className="font-mono font-bold text-[#002045] mt-0.5 text-[11px]">
-                              {question.gpsConfig?.requireAltitude !== false ? '482.5 m' : 'N/A'}
-                            </div>
-                          </div>
-                          <div className="p-2 bg-white rounded-lg border border-[#c4c6cf]/60 shadow-xs">
-                            <div className="text-[9px] uppercase font-bold text-[#74777f]">Accuracy</div>
-                            <div className="font-mono font-bold text-[#006a68] mt-0.5 text-[11px]">± 3.2 m</div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center justify-between text-[11px] pt-1 text-[#43474e] border-t border-[#006a68]/20">
-                          <span className="flex items-center gap-1">
-                            <span className="material-symbols-outlined text-[14px] text-[#006a68]">satellite_alt</span>
-                            <span>Hardware GNSS / Geolocation Sensor</span>
-                          </span>
-                          <span className="text-[10px] text-[#74777f] font-mono">
-                            {question.gpsConfig?.allowManualEntry !== false ? 'Manual entry enabled' : 'Strict GPS sensor only'}
-                          </span>
-                        </div>
-                      </div>
+                    {(question.type === 'geolocation' || question.type === 'gps-coordinate') && (
+                      <GeolocationFieldRenderer
+                        question={question}
+                        isReadOnly={false}
+                        autoCapture={false}
+                      />
                     )}
                   </div>
 
@@ -1272,13 +1240,14 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                       <option value="short-text">Short Text</option>
                       <option value="paragraph">Paragraph Narrative</option>
                       <option value="date-time">Date & Time</option>
-                      <option value="gps-coordinate">GPS / Location Coordinates</option>
+                      <option value="geolocation">Geolocation (GPS & Map)</option>
+                      <option value="gps-coordinate">GPS Coordinates</option>
                     </select>
                   </div>
                 </div>
 
                 {/* GPS / Geospatial Settings */}
-                {selectedQuestion?.type === 'gps-coordinate' && (
+                {(selectedQuestion?.type === 'geolocation' || selectedQuestion?.type === 'gps-coordinate') && (
                   <div className="space-y-3 pt-2 border-t border-[#c4c6cf]/30">
                     <div className="flex items-center justify-between pb-1">
                       <h3 className="text-xs font-bold text-[#002045] flex items-center gap-1.5">

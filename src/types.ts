@@ -60,6 +60,7 @@ export type QuestionType =
   | 'dropdown'
   | 'date-time'
   | 'number'
+  | 'geolocation'
   | 'gps-coordinate';
 
 export interface QuestionGpsConfig {
@@ -67,6 +68,14 @@ export interface QuestionGpsConfig {
   requireAltitude?: boolean;
   allowManualEntry?: boolean;
   captureMode?: 'point' | 'facility' | 'boundary';
+}
+
+export interface QuestionGpsValue {
+  latitude: number;
+  longitude: number;
+  altitude?: number | null;
+  accuracy?: number | null;
+  timestamp?: string | null;
 }
 
 export type DataType = 'Categorical' | 'Numerical' | 'Ordinal' | 'Continuous';
@@ -310,3 +319,282 @@ export interface ApiKey {
   lastUsed: string;
   keyMask: string;
 }
+
+// ==============================================================================
+// RELATIONAL DATABASE & SUPABASE POSTGRESQL SCHEMAS
+// ==============================================================================
+
+export type PlatformRole =
+  | 'super_admin'
+  | 'researcher'
+  | 'research_assistant'
+  | 'enumerator'
+  | 'data_manager'
+  | 'analyst'
+  | 'respondent';
+
+export type UserAccountStatus = 'active' | 'suspended' | 'pending_verification' | 'inactive';
+
+export interface DbProfile {
+  id: string;
+  email: string;
+  full_name: string;
+  phone?: string | null;
+  avatar_url?: string | null;
+  institution?: string | null;
+  department?: string | null;
+  role: PlatformRole;
+  status: UserAccountStatus;
+  metadata?: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type DbProjectStatus = 'draft' | 'active' | 'collection' | 'analysis' | 'completed' | 'archived';
+
+export interface DbProject {
+  id: string;
+  owner_id: string;
+  project_code: string;
+  title: string;
+  description?: string | null;
+  research_topic?: string | null;
+  research_design?: string | null;
+  institution?: string | null;
+  status: DbProjectStatus;
+  progress: number;
+  quality_score: number;
+  research_objectives?: string[];
+  start_date?: string | null;
+  end_date?: string | null;
+  notes?: string | null;
+  metadata?: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type ProjectMemberRole =
+  | 'owner'
+  | 'co_investigator'
+  | 'research_assistant'
+  | 'data_manager'
+  | 'analyst'
+  | 'field_supervisor'
+  | 'viewer';
+
+export interface DbProjectMember {
+  id: string;
+  project_id: string;
+  user_id: string;
+  role: ProjectMemberRole;
+  permissions: {
+    can_edit?: boolean;
+    can_analyze?: boolean;
+    can_export?: boolean;
+    can_manage_enumerators?: boolean;
+  };
+  status: string;
+  invited_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  profile?: DbProfile;
+}
+
+export type QuestionnaireStatus = 'draft' | 'testing' | 'published' | 'closed' | 'archived';
+
+export interface DbQuestionnaire {
+  id: string;
+  project_id: string;
+  created_by: string;
+  name: string;
+  description?: string | null;
+  status: QuestionnaireStatus;
+  current_version_id?: string | null;
+  metadata?: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+  current_version?: DbQuestionnaireVersion;
+}
+
+export type VersionStatus = 'draft' | 'published' | 'deprecated' | 'archived';
+
+export interface DbQuestionnaireVersion {
+  id: string;
+  questionnaire_id: string;
+  version_number: string;
+  status: VersionStatus;
+  title: string;
+  description?: string | null;
+  schema_definition?: Record<string, any>;
+  published_by?: string | null;
+  published_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  questions?: DbQuestion[];
+}
+
+export interface DbQuestion {
+  id: string;
+  questionnaire_version_id: string;
+  question_number: string;
+  section?: string | null;
+  question_text: string;
+  help_text?: string | null;
+  variable_name: string;
+  variable_label?: string | null;
+  question_type: QuestionType;
+  data_type: 'Categorical' | 'Numerical' | 'Ordinal' | 'Continuous';
+  measurement_level: 'Nominal' | 'Ordinal' | 'Interval' | 'Ratio';
+  required: boolean;
+  has_other_option?: boolean;
+  likert_scale?: number | null;
+  linked_research_objective?: string | null;
+  validation_rules?: Record<string, any>;
+  conditional_logic?: Record<string, any>;
+  gps_config?: QuestionGpsConfig;
+  display_order: number;
+  options?: DbQuestionOption[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DbQuestionOption {
+  id: string;
+  question_id: string;
+  option_label: string;
+  option_value: string;
+  numeric_code?: number | null;
+  display_order: number;
+  metadata?: Record<string, any>;
+  created_at?: string;
+}
+
+export interface DbVariable {
+  id: string;
+  project_id: string;
+  questionnaire_id?: string | null;
+  question_id?: string | null;
+  variable_name: string;
+  variable_label: string;
+  data_type: 'Categorical' | 'Numerical' | 'Ordinal' | 'Continuous';
+  measurement_level: 'Nominal' | 'Ordinal' | 'Interval' | 'Ratio';
+  possible_values?: string[];
+  codes?: Array<{ code: number | string; label: string }>;
+  missing_value_rules?: Record<string, any>;
+  research_objective?: string | null;
+  hypothesis_relationship?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type AssignmentStatus = 'active' | 'paused' | 'revoked' | 'completed';
+
+export interface DbQuestionnaireAssignment {
+  id: string;
+  questionnaire_id: string;
+  questionnaire_version_id?: string | null;
+  enumerator_id: string;
+  assigned_by: string;
+  status: AssignmentStatus;
+  start_date?: string | null;
+  end_date?: string | null;
+  permissions?: {
+    can_collect?: boolean;
+    can_view_history?: boolean;
+    can_edit_drafts?: boolean;
+  };
+  created_at?: string;
+  updated_at?: string;
+  questionnaire?: DbQuestionnaire;
+  enumerator?: DbProfile;
+}
+
+export type ResponseSyncStatus =
+  | 'draft'
+  | 'submitted'
+  | 'pending_sync'
+  | 'synced'
+  | 'conflict'
+  | 'rejected'
+  | 'locked';
+
+export interface DbResponse {
+  id: string;
+  project_id: string;
+  questionnaire_id: string;
+  questionnaire_version_id: string;
+  enumerator_id?: string | null;
+  respondent_id: string;
+  collection_status: ResponseSyncStatus;
+  collected_offline: boolean;
+  gps_coordinates?: QuestionGpsValue | null;
+  telemetry?: Record<string, any>;
+  started_at?: string | null;
+  completed_at?: string | null;
+  submitted_at: string;
+  synced_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  answers?: DbResponseAnswer[];
+}
+
+export interface DbResponseAnswer {
+  id: string;
+  response_id: string;
+  question_id?: string | null;
+  variable_name: string;
+  answer_value: any;
+  text_value?: string | null;
+  numeric_value?: number | null;
+  boolean_value?: boolean | null;
+  date_value?: string | null;
+  gps_value?: QuestionGpsValue | null;
+  created_at?: string;
+}
+
+export interface DbDataQualityIssue {
+  id: string;
+  project_id: string;
+  response_id?: string | null;
+  variable_name?: string | null;
+  issue_type: 'incomplete_response' | 'outlier' | 'conflicting_answers' | 'duplicate_submission' | 'validation_error' | 'gps_anomaly';
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  details: string;
+  status: 'pending' | 'reviewed' | 'resolved' | 'ignored';
+  flag_metadata?: Record<string, any>;
+  detected_at: string;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+}
+
+export interface DbStatisticalAnalysis {
+  id: string;
+  project_id: string;
+  title: string;
+  analysis_type: string;
+  statistical_test: string;
+  variables_used: string[];
+  parameters?: Record<string, any>;
+  results: Record<string, any>;
+  p_value?: number | null;
+  confidence_interval?: Record<string, any> | null;
+  effect_size?: Record<string, any> | null;
+  assumptions?: Record<string, any> | null;
+  interpretation?: string | null;
+  executed_by?: string | null;
+  executed_at: string;
+  created_at?: string;
+}
+
+export interface DbAuditLog {
+  id: string;
+  user_id?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id?: string | null;
+  details: Record<string, any>;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  created_at: string;
+}
+
