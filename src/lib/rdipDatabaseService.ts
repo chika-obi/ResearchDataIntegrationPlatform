@@ -117,29 +117,74 @@ export async function createProjectInDb(
       };
     }
 
-    // 2. Guarantee owner_id is the real authenticated user UUID (prevent fake/mock owner ID)
-    const projectPayload = {
-      ...project,
-      owner_id: authData.user.id
-    };
+    const userId = authData.user.id;
+    const userEmail = authData.user.email || '';
 
-    // 3. Real INSERT into Supabase public.projects using authenticated Supabase client
-    const { data, error } = await supabase
-      .from('projects')
-      .insert([projectPayload])
-      .select()
-      .single();
+    // 2. Inspect creator profile to ensure active role permission
+    const { data: creatorProfile, error: profileErr } = await supabase
+      .from('profiles')
+      .select('id, email, role, status')
+      .eq('id', userId)
+      .maybeSingle();
 
-    if (error) {
-      console.error('[RDIP DB] Failed to create project in Supabase:', error);
-      return { data: null, error: error.message };
+    if (profileErr) {
+      console.warn('[RDIP DB] Notice querying creator profile:', profileErr);
     }
 
-    // 4. Register project owner in project_members for team collaboration queries
+    if (!creatorProfile) {
+      console.warn('[RDIP DB] Profile not found in public.profiles. Attempting initialization...');
+      try {
+        await supabase.from('profiles').upsert({
+          id: userId,
+          email: userEmail,
+          full_name: authData.user.user_metadata?.full_name || userEmail.split('@')[0] || 'Researcher',
+          institution: authData.user.user_metadata?.institution || 'Research Institute',
+          role: 'researcher',
+          status: 'active'
+        });
+      } catch (upsertErr) {
+        console.debug('[RDIP DB] Profile auto-provisioning note:', upsertErr);
+      }
+    } else {
+      if (creatorProfile.status !== 'active') {
+        return {
+          data: null,
+          error: `Permission denied: Your RDIP account status is '${creatorProfile.status}'. An active status is required to register research projects.`
+        };
+      }
+
+      const allowedRoles = ['researcher', 'data_manager', 'super_admin'];
+      if (!allowedRoles.includes(creatorProfile.role)) {
+        return {
+          data: null,
+          error: `Permission denied: Your current database role is '${creatorProfile.role}'. Research projects may only be created by researchers, data managers, or administrators.`
+        };
+      }
+    }
+
+    // 3. Pre-generate project UUID to avoid INSERT ... RETURNING * RLS evaluation race
+    const newProjectId = (project as any).id || crypto.randomUUID();
+    const finalProjectPayload = {
+      ...project,
+      id: newProjectId,
+      owner_id: userId
+    };
+
+    // 4. Perform direct INSERT without .select() to prevent premature SELECT RLS evaluation
+    const { error: insertError } = await supabase
+      .from('projects')
+      .insert([finalProjectPayload]);
+
+    if (insertError) {
+      console.error('[RDIP DB] Failed to insert project into Supabase:', insertError);
+      return { data: null, error: insertError.message };
+    }
+
+    // 5. Authoritatively register project owner in project_members
     try {
       await supabase.from('project_members').insert([{
-        project_id: data.id,
-        user_id: projectPayload.owner_id,
+        project_id: newProjectId,
+        user_id: userId,
         role: 'owner',
         permissions: {
           can_edit: true,
@@ -153,20 +198,52 @@ export async function createProjectInDb(
       console.debug('[RDIP DB] Owner membership record note:', pmErr);
     }
 
-    // 5. Log immutable audit trail event
+    // 6. Retrieve the authoritative project record
+    const { data: fetchedProject, error: fetchError } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('id', newProjectId)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.debug('[RDIP DB] Project fetch note after insert:', fetchError);
+    }
+
+    const resultProject: DbProject = fetchedProject || {
+      id: newProjectId,
+      owner_id: userId,
+      project_code: finalProjectPayload.project_code,
+      title: finalProjectPayload.title,
+      description: finalProjectPayload.description,
+      research_topic: finalProjectPayload.research_topic,
+      research_design: finalProjectPayload.research_design,
+      institution: finalProjectPayload.institution,
+      status: finalProjectPayload.status,
+      progress: finalProjectPayload.progress,
+      quality_score: finalProjectPayload.quality_score,
+      research_objectives: finalProjectPayload.research_objectives,
+      start_date: finalProjectPayload.start_date,
+      end_date: finalProjectPayload.end_date,
+      notes: finalProjectPayload.notes,
+      metadata: finalProjectPayload.metadata,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // 7. Log immutable audit trail event
     try {
       await logAuditEvent({
-        user_id: projectPayload.owner_id,
+        user_id: userId,
         action: 'PROJECT_CREATED',
         entity_type: 'project',
-        entity_id: data.id,
-        details: { title: data.title, code: data.project_code },
+        entity_id: newProjectId,
+        details: { title: resultProject.title, code: resultProject.project_code },
       });
     } catch (auditErr) {
       console.debug('[RDIP DB] Audit log note:', auditErr);
     }
 
-    return { data: data as DbProject, error: null };
+    return { data: resultProject, error: null };
   } catch (err: any) {
     console.error('[RDIP DB] createProjectInDb exception:', err);
     return {

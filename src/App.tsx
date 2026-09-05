@@ -166,40 +166,71 @@ export function App() {
       .eq('id', authUser.id)
       .single();
 
-    if (profileError || !profile) {
-      console.error(
-        'RDIP profile lookup failed:',
+    let userProfileRecord = profile;
+
+    if (profileError || !userProfileRecord) {
+      console.warn(
+        'RDIP profile lookup returned no record, attempting profile provisioning:',
         profileError
       );
 
-      return null;
+      const defaultFullName = authUser.email ? authUser.email.split('@')[0] : 'Researcher';
+      try {
+        await supabase
+          .from('profiles')
+          .upsert({
+            id: authUser.id,
+            email: authUser.email || '',
+            full_name: defaultFullName,
+            institution: 'Research Institute',
+            role: 'researcher',
+            status: 'active'
+          });
+
+        const { data: retriedProfile } = await supabase
+          .from('profiles')
+          .select(
+            'id, email, full_name, phone, avatar_url, institution, department, role, status'
+          )
+          .eq('id', authUser.id)
+          .maybeSingle();
+
+        userProfileRecord = retriedProfile;
+      } catch (upsertErr) {
+        console.error('Failed to auto-provision profile:', upsertErr);
+      }
+
+      if (!userProfileRecord) {
+        console.error('RDIP profile lookup failed and profile could not be loaded.');
+        return null;
+      }
     }
 
     /*
      * Never allow a non-active account into the application.
      */
-    if (profile.status !== 'active') {
+    if (userProfileRecord.status !== 'active') {
       console.warn(
         'RDIP account is not active:',
-        profile.status
+        userProfileRecord.status
       );
 
       return null;
     }
 
-    const databaseRole = String(profile.role);
+    const databaseRole = String(userProfileRecord.role);
 
     const authenticatedUser: UserProfile = {
       ...INITIAL_USER,
-      id: profile.id,
-      name: profile.full_name,
-      email: profile.email || authUser.email || '',
+      id: userProfileRecord.id,
+      name: userProfileRecord.full_name || 'Researcher',
+      email: userProfileRecord.email || authUser.email || '',
       institution:
-        profile.institution || 'Research Institute',
+        userProfileRecord.institution || 'Research Institute',
       department:
-        profile.department || '',
+        userProfileRecord.department || '',
       avatar:
-        profile.avatar_url || '',
+        userProfileRecord.avatar_url || '',
       role:
         mapDatabaseRoleToApplicationRole(databaseRole)
     };
