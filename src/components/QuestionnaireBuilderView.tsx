@@ -1,12 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { Question, QuestionOption, DataType, MeasurementLevel, QuestionType, QuestionLogicRule, QuestionGpsConfig } from '../types';
+import {
+  Question,
+  QuestionOption,
+  DataType,
+  MeasurementLevel,
+  QuestionType,
+  QuestionLogicRule,
+  QuestionGpsConfig,
+  Project,
+  UserProfile,
+  DbQuestionnaire,
+  DbQuestionnaireVersion,
+} from '../types';
 import { INITIAL_QUESTIONS } from '../data/mockData';
 import { PublicSurveyModal } from './PublicSurveyModal';
 import { LogicConditionBuilder } from './LogicConditionBuilder';
 import { LogicImportExportModal } from './LogicImportExportModal';
+import { CreateQuestionnaireModal } from './CreateQuestionnaireModal';
 import { formatLogicExpression } from '../lib/surveyLogicEvaluator';
 import { downloadLogicFlowJSON } from '../lib/logicImportExport';
 import { GeolocationFieldRenderer } from './GeolocationFieldRenderer';
+import {
+  fetchProjectQuestionnaires,
+  createQuestionnaireInDb,
+  saveQuestionnaireDraftInDb,
+  CreateQuestionnaireParams,
+} from '../lib/rdipDatabaseService';
 
 export const ensureQuestionsStartWithQ1 = (items: Question[]): Question[] => {
   return items.map((q, idx) => ({
@@ -15,11 +34,25 @@ export const ensureQuestionsStartWithQ1 = (items: Question[]): Question[] => {
   }));
 };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface QuestionnaireBuilderViewProps {
   onOpenPreview?: () => void;
+  projects?: Project[];
+  selectedProject?: Project | null;
+  onSelectProject?: (project: Project) => void;
+  currentUser?: UserProfile;
+  isAuthenticated?: boolean;
 }
 
-export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> = () => {
+export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> = ({
+  onOpenPreview,
+  projects = [],
+  selectedProject = null,
+  onSelectProject,
+  currentUser,
+  isAuthenticated = false,
+}) => {
   const [questions, setQuestions] = useState<Question[]>(() => {
     const saved = localStorage.getItem('rdip_active_questionnaire');
     if (saved) {
@@ -64,9 +97,139 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [mobileActiveTab, setMobileActiveTab] = useState<'canvas' | 'bank' | 'inspector'>('canvas');
 
+  // Supabase Database Integration State
+  const [projectQuestionnaires, setProjectQuestionnaires] = useState<DbQuestionnaire[]>([]);
+  const [activeDbQuestionnaire, setActiveDbQuestionnaire] = useState<DbQuestionnaire | null>(null);
+  const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
+  const [isDbLoading, setIsDbLoading] = useState(false);
+  const [isSavingDb, setIsSavingDb] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [dbSyncStatus, setDbSyncStatus] = useState<'synced' | 'local_only' | 'error'>('local_only');
+  const [dbStatusToast, setDbStatusToast] = useState<string | null>(null);
+
   const selectedQuestion = questions.find((q) => q.id === selectedQuestionId) || questions[0];
 
   const questionsWithLogicCount = questions.filter((q) => q.logicRule?.enabled && q.logicRule.branches.length > 0).length;
+
+  // Load questionnaires belonging to selected project from Supabase
+  useEffect(() => {
+    let isMounted = true;
+    async function loadDbQuestionnaires() {
+      if (!selectedProject?.id || !UUID_REGEX.test(selectedProject.id)) {
+        setProjectQuestionnaires([]);
+        setActiveDbQuestionnaire(null);
+        setDbSyncStatus('local_only');
+        return;
+      }
+
+      setIsDbLoading(true);
+      try {
+        const qList = await fetchProjectQuestionnaires(selectedProject.id);
+        if (!isMounted) return;
+        setProjectQuestionnaires(qList);
+
+        if (qList.length > 0) {
+          const latest = qList[0];
+          setActiveDbQuestionnaire(latest);
+          setSurveyTitle(latest.name);
+          setActiveVersionId(latest.current_version_id || latest.current_version?.id || null);
+
+          const verNum = latest.current_version?.version_number || 'v1.0';
+          const verStatus = latest.current_version?.status || 'draft';
+          setSurveyVersion(`${verNum} (${verStatus.toUpperCase()})`);
+
+          if (
+            latest.current_version?.schema_definition?.questions &&
+            Array.isArray(latest.current_version.schema_definition.questions) &&
+            latest.current_version.schema_definition.questions.length > 0
+          ) {
+            const normalized = ensureQuestionsStartWithQ1(
+              latest.current_version.schema_definition.questions
+            );
+            setQuestions(normalized);
+            setSelectedQuestionId(normalized[0].id);
+          }
+          setDbSyncStatus('synced');
+        } else {
+          setActiveDbQuestionnaire(null);
+          setDbSyncStatus('local_only');
+        }
+      } catch (err) {
+        console.warn('[RDIP Studio] Supabase load notice:', err);
+        if (isMounted) setDbSyncStatus('error');
+      } finally {
+        if (isMounted) setIsDbLoading(false);
+      }
+    }
+
+    loadDbQuestionnaires();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedProject?.id]);
+
+  const handleSelectDbQuestionnaire = (qId: string) => {
+    const q = projectQuestionnaires.find((item) => item.id === qId);
+    if (!q) return;
+
+    setActiveDbQuestionnaire(q);
+    setSurveyTitle(q.name);
+    setActiveVersionId(q.current_version_id || q.current_version?.id || null);
+
+    const verNum = q.current_version?.version_number || 'v1.0';
+    const verStatus = q.current_version?.status || 'draft';
+    setSurveyVersion(`${verNum} (${verStatus.toUpperCase()})`);
+
+    if (
+      q.current_version?.schema_definition?.questions &&
+      Array.isArray(q.current_version.schema_definition.questions) &&
+      q.current_version.schema_definition.questions.length > 0
+    ) {
+      const normalized = ensureQuestionsStartWithQ1(q.current_version.schema_definition.questions);
+      setQuestions(normalized);
+      setSelectedQuestionId(normalized[0].id);
+    }
+    setDbSyncStatus('synced');
+  };
+
+  const handleCreateQuestionnaire = async (params: CreateQuestionnaireParams) => {
+    const result = await createQuestionnaireInDb(params);
+    if (result.error || !result.data) {
+      return {
+        success: false,
+        error: result.error || 'Failed to create questionnaire in Supabase.',
+      };
+    }
+
+    const { questionnaire, version } = result.data;
+    setProjectQuestionnaires((prev) => [questionnaire, ...prev]);
+    setActiveDbQuestionnaire(questionnaire);
+    setActiveVersionId(version.id);
+    setSurveyTitle(questionnaire.name);
+    setSurveyVersion(`${version.version_number} (DRAFT)`);
+
+    if (
+      version.schema_definition?.questions &&
+      Array.isArray(version.schema_definition.questions) &&
+      version.schema_definition.questions.length > 0
+    ) {
+      const normalized = ensureQuestionsStartWithQ1(version.schema_definition.questions);
+      setQuestions(normalized);
+      setSelectedQuestionId(normalized[0].id);
+    }
+
+    setDbSyncStatus('synced');
+    setDbStatusToast(
+      `Questionnaire "${questionnaire.name}" created in Supabase with draft version ${version.version_number}!`
+    );
+    setTimeout(() => setDbStatusToast(null), 4000);
+
+    return {
+      success: true,
+      questionnaire,
+      version,
+    };
+  };
 
   useEffect(() => {
     const handleTemplateLoaded = (event: Event) => {
@@ -283,14 +446,47 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     handleUpdateSelected({ options: updated });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setIsSavingDb(true);
+
+    // Save to local cache
     localStorage.setItem('rdip_active_questionnaire', JSON.stringify(questions));
     localStorage.setItem('rdip_survey_title', surveyTitle);
     localStorage.setItem('rdip_survey_version', surveyVersion);
     localStorage.setItem('rdip_survey_style', surveyStyle);
     localStorage.setItem('rdip_survey_last_saved', new Date().toLocaleTimeString());
+
+    if (activeDbQuestionnaire?.id) {
+      const res = await saveQuestionnaireDraftInDb({
+        questionnaire_id: activeDbQuestionnaire.id,
+        version_id: activeVersionId || undefined,
+        name: surveyTitle,
+        questions,
+        metadata: {
+          style: surveyStyle,
+          section: surveySection,
+          sectionDesc: surveySectionDesc,
+        },
+      });
+
+      if (!res.success) {
+        setDbStatusToast(`Save notice: ${res.error || 'Saved locally; database sync failed.'}`);
+      } else {
+        setDbSyncStatus('synced');
+        setDbStatusToast('✓ Authoritative draft version saved to Supabase (public.questionnaires & questionnaire_versions)!');
+      }
+    } else if (selectedProject?.id && UUID_REGEX.test(selectedProject.id) && currentUser?.role !== 'enumerator') {
+      setIsCreateModalOpen(true);
+    } else {
+      setDbStatusToast('Draft saved to local cache. (Connect to a Supabase project to persist to cloud database)');
+    }
+
+    setIsSavingDb(false);
     setIsSavedToast(true);
-    setTimeout(() => setIsSavedToast(false), 3000);
+    setTimeout(() => {
+      setIsSavedToast(false);
+      setDbStatusToast(null);
+    }, 4000);
   };
 
   const handleCreateNewVersion = () => {
@@ -302,50 +498,113 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     setTimeout(() => setIsSavedToast(false), 3000);
   };
 
+  const isEnumerator = currentUser?.role === 'enumerator';
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f9f9ff]">
+      {/* Field Enumerator Read-Only Banner */}
+      {isEnumerator && (
+        <div className="bg-amber-100/90 border-b border-amber-300 px-4 py-2 text-amber-900 text-xs flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px] text-amber-700">
+              admin_panel_settings
+            </span>
+            <span className="font-semibold">Field Enumerator Read-Only Mode:</span>
+            <span>
+              Under RDIP database policies, questionnaire authoring and version publishing are restricted to Researchers.
+            </span>
+          </div>
+          <span className="text-[11px] font-mono bg-white/70 px-2 py-0.5 rounded border border-amber-300">
+            RLS Enforcement Active
+          </span>
+        </div>
+      )}
+
       {/* Primary Studio Header Bar */}
       <div className="h-14 sm:h-16 border-b border-[#c4c6cf]/60 bg-white flex items-center justify-between px-3 sm:px-4 md:px-6 shrink-0 z-20 shadow-xs">
-        {/* Left: Survey Identity, Title and Version */}
+        {/* Left: Survey Identity, Title, Project Context and Switcher */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-[#1a365d]/10 text-[#1a365d] flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[20px]">quiz</span>
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-            <input
-              type="text"
-              value={surveyTitle}
-              onChange={(e) => setSurveyTitle(e.target.value)}
-              title="Click to edit questionnaire title"
-              className="text-xs sm:text-sm md:text-base font-bold text-[#002045] bg-transparent border border-transparent hover:border-[#c4c6cf] focus:border-[#1a365d] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1a365d] rounded px-1.5 py-0.5 min-w-[110px] max-w-[150px] sm:max-w-[220px] md:max-w-xs lg:max-w-sm truncate transition-all"
-            />
+            {/* Project Context Pill */}
+            {selectedProject && (
+              <div
+                className="hidden lg:flex items-center gap-1.5 bg-[#f1f3ff] border border-[#c4c6cf]/80 px-2.5 py-1 rounded-lg text-xs shrink-0 max-w-[200px]"
+                title={`Parent Research Project: ${selectedProject.title}`}
+              >
+                <span className="material-symbols-outlined text-[15px] text-[#1a365d]">folder</span>
+                <span className="font-bold text-[#002045] truncate">
+                  {selectedProject.projectCode || 'PROJ'}
+                </span>
+              </div>
+            )}
 
-            <div className="flex items-center gap-1 shrink-0">
-              <select
-                value={surveyVersion}
-                onChange={(e) => setSurveyVersion(e.target.value)}
-                className="text-[10px] sm:text-[11px] font-bold px-1.5 sm:px-2 py-0.5 rounded bg-[#dde2f3] text-[#002045] border border-[#adc7f7] outline-none cursor-pointer"
-              >
-                <option value="v2.0 (Active)">v2.0 (Active)</option>
-                <option value="v1.1 (Archive)">v1.1 (Archive)</option>
-                <option value="v1.0 (Baseline)">v1.0 (Baseline)</option>
-              </select>
+            {/* Supabase Questionnaire Switcher / Input */}
+            {projectQuestionnaires.length > 0 ? (
+              <div className="flex items-center gap-1 shrink-0">
+                <select
+                  id="studio-questionnaire-selector"
+                  value={activeDbQuestionnaire?.id || ''}
+                  onChange={(e) => handleSelectDbQuestionnaire(e.target.value)}
+                  className="text-xs font-bold text-[#002045] bg-[#f9f9ff] border border-[#c4c6cf] hover:border-[#1a365d] rounded-lg px-2 py-1 outline-none max-w-[200px] truncate cursor-pointer"
+                  title="Switch between Supabase questionnaires in this project"
+                >
+                  {projectQuestionnaires.map((q) => (
+                    <option key={q.id} value={q.id}>
+                      {q.name} ({q.current_version?.version_number || 'v1.0'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={surveyTitle}
+                onChange={(e) => setSurveyTitle(e.target.value)}
+                disabled={isEnumerator}
+                title="Click to edit questionnaire title"
+                className="text-xs sm:text-sm md:text-base font-bold text-[#002045] bg-transparent border border-transparent hover:border-[#c4c6cf] focus:border-[#1a365d] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1a365d] rounded px-1.5 py-0.5 min-w-[110px] max-w-[150px] sm:max-w-[200px] md:max-w-xs truncate transition-all"
+              />
+            )}
+
+            {/* "+ New Questionnaire" Action Button */}
+            {!isEnumerator && (
               <button
-                onClick={handleCreateNewVersion}
-                className="text-[10px] sm:text-[11px] text-[#1a365d] hover:underline font-bold px-0.5 whitespace-nowrap"
-                title="Create new revision"
+                id="studio-create-questionnaire-btn"
+                type="button"
+                onClick={() => setIsCreateModalOpen(true)}
+                className="px-2.5 py-1 bg-[#006a68]/10 text-[#006a68] hover:bg-[#006a68]/20 border border-[#006a68]/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                title="Create a new questionnaire in Supabase PostgreSQL"
               >
-                + Revise
+                <span className="material-symbols-outlined text-[15px]">add_circle</span>
+                <span className="hidden sm:inline">+ New Questionnaire</span>
+                <span className="sm:hidden">+ New</span>
               </button>
+            )}
+
+            {/* Version Badge */}
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded bg-[#dde2f3] text-[#002045] border border-[#adc7f7]">
+                {surveyVersion}
+              </span>
             </div>
           </div>
 
-          {/* Real-time Save Status Pill */}
-          <div className="hidden xl:flex items-center gap-1 text-[11px] text-[#006a68] font-medium bg-[#91f0ed]/25 border border-[#006a68]/30 px-2 py-0.5 rounded-full shrink-0">
-            <span className="material-symbols-outlined text-[13px]">cloud_done</span>
-            <span>Saved</span>
-          </div>
+          {/* Database Synchronization Status Badge */}
+          {dbSyncStatus === 'synced' ? (
+            <div className="hidden xl:flex items-center gap-1 text-[11px] text-[#006a68] font-medium bg-[#91f0ed]/25 border border-[#006a68]/30 px-2 py-0.5 rounded-full shrink-0">
+              <span className="material-symbols-outlined text-[13px]">cloud_done</span>
+              <span>Supabase DB (Draft)</span>
+            </div>
+          ) : (
+            <div className="hidden xl:flex items-center gap-1 text-[11px] text-amber-800 font-medium bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-full shrink-0">
+              <span className="material-symbols-outlined text-[13px]">cloud_off</span>
+              <span>Local Draft</span>
+            </div>
+          )}
         </div>
 
         {/* Right: Primary Quick Action Controls */}
@@ -369,13 +628,16 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           </button>
 
           <button
+            id="studio-save-draft-btn"
             onClick={handleSave}
-            className="px-3 sm:px-4 py-1.5 bg-[#1a365d] text-white text-xs font-semibold hover:bg-[#002045] rounded-lg transition-colors flex items-center gap-1.5 shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
-            title="Save changes and deploy version"
+            disabled={isEnumerator || isSavingDb}
+            className="px-3 sm:px-4 py-1.5 bg-[#1a365d] text-white text-xs font-semibold hover:bg-[#002045] disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
+            title={activeDbQuestionnaire ? 'Save draft changes to Supabase' : 'Save draft locally / to project'}
           >
-            <span className="material-symbols-outlined text-[17px]">save</span>
-            <span>Save</span>
-            <span className="hidden sm:inline">& Deploy</span>
+            <span className={`material-symbols-outlined text-[17px] ${isSavingDb ? 'animate-spin' : ''}`}>
+              {isSavingDb ? 'refresh' : 'save'}
+            </span>
+            <span>{isSavingDb ? 'Saving to DB...' : 'Save Draft'}</span>
           </button>
         </div>
       </div>
@@ -1872,6 +2134,42 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         surveyTitle={surveyTitle}
         onApplyImportedQuestions={handleApplyImportedQuestions}
       />
+
+      {/* Supabase Authoritative Questionnaire Creation Modal */}
+      <CreateQuestionnaireModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        projects={projects}
+        selectedProjectId={selectedProject?.id}
+        currentUser={
+          currentUser || {
+            id: 'anon-researcher',
+            name: 'Researcher',
+            email: 'researcher@rdip.org',
+            role: 'researcher',
+            institution: 'Research Lab',
+          }
+        }
+        onCreateQuestionnaire={handleCreateQuestionnaire}
+      />
+
+      {/* Database Operation Notification Toast */}
+      {dbStatusToast && (
+        <div
+          id="rdip-db-status-toast"
+          className="fixed bottom-6 left-6 z-[140] bg-[#002045] text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-[#91f0ed]/30 animate-in slide-in-from-bottom-5"
+        >
+          <span className="material-symbols-outlined text-[#91f0ed] text-[20px]">cloud_sync</span>
+          <span className="text-xs font-semibold">{dbStatusToast}</span>
+          <button
+            type="button"
+            onClick={() => setDbStatusToast(null)}
+            className="text-white/60 hover:text-white ml-2 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px]">close</span>
+          </button>
+        </div>
+      )}
 
       {/* Toast Notification for Logic Import & Actions */}
       {importToastMessage && (

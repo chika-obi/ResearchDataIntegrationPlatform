@@ -926,6 +926,11 @@ export function App() {
                   true
                 )
               }
+              projects={projects}
+              selectedProject={selectedProject}
+              onSelectProject={(p) => setSelectedProject(p)}
+              currentUser={currentUser}
+              isAuthenticated={isAuthenticated}
             />
           )}
 
