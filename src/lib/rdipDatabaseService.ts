@@ -35,15 +35,38 @@ export async function getCurrentUserProfile(): Promise<DbProfile | null> {
       return null;
     }
 
-    const { data, error } = await supabase
+    let { data } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', authData.user.id)
-      .single();
+      .maybeSingle();
 
-    if (error) {
-      console.warn('[RDIP DB] Could not fetch profile from Supabase:', error.message);
-      return null;
+    if (!data && authData.user.email) {
+      const { data: emailData } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', authData.user.email)
+        .maybeSingle();
+      if (emailData) {
+        data = emailData;
+      }
+    }
+
+    if (!data) {
+      // Graceful fallback to authenticated user metadata
+      const meta = (authData.user as any).user_metadata || {};
+      const fallbackRole = (meta.role as any) || 'researcher';
+      return {
+        id: authData.user.id,
+        email: authData.user.email || '',
+        full_name: meta.full_name || meta.name || authData.user.email?.split('@')[0] || 'Researcher',
+        institution: meta.institution || 'Research Institute',
+        department: meta.department || null,
+        role: fallbackRole,
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
     }
 
     return data as DbProfile;
@@ -58,6 +81,23 @@ export async function getCurrentUserProfile(): Promise<DbProfile | null> {
 // ==============================================================================
 
 export function mapDbProjectToProject(db: DbProject): Project {
+  if (!db) {
+    return {
+      id: '',
+      code: 'PROJ',
+      title: 'Untitled Project',
+      institution: 'Research Institute',
+      status: 'Active',
+      progress: 0,
+      enumeratorsCount: 0,
+      responsesCount: 0,
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: '2025-12-31',
+      description: '',
+      qualityScore: 100,
+      researchObjectives: [],
+    };
+  }
   let status: ProjectStatus = 'Active';
   if (db.status === 'draft') status = 'Design';
   else if (db.status === 'active') status = 'Active';
@@ -292,15 +332,151 @@ export interface CreateQuestionnaireParams {
   metadata?: Record<string, any>;
 }
 
+export interface FormattedSupabaseError {
+  title: string;
+  friendlyMessage: string;
+  code?: string;
+  technicalDetails?: string;
+  actionHint?: string;
+}
+
+export function formatSupabaseError(error: any): FormattedSupabaseError {
+  if (!error) {
+    return {
+      title: 'Database Operation Error',
+      friendlyMessage: 'An unexpected database error occurred while communicating with Supabase.',
+      actionHint: 'Please review your inputs and try again.',
+    };
+  }
+
+  const rawMessage: string =
+    typeof error === 'string'
+      ? error
+      : error.message || error.error_description || error.error || JSON.stringify(error);
+  const rawCode: string | undefined =
+    error.code ||
+    (rawMessage.match(/\b(23505|42501|23503|23502|PGRST\d+)\b/)
+      ? rawMessage.match(/\b(23505|42501|23503|23502|PGRST\d+)\b/)![1]
+      : undefined);
+  const technicalDetails: string | undefined =
+    error.details || error.hint || (typeof error === 'object' && error.message ? error.message : undefined);
+
+  // 1. Unique constraint / duplicate key (PostgreSQL code 23505)
+  if (rawCode === '23505' || /unique constraint|already exists|duplicate key/i.test(rawMessage)) {
+    return {
+      title: 'Duplicate Questionnaire Title',
+      friendlyMessage:
+        'A questionnaire with this title already exists in the selected project. Questionnaire titles must be unique within each research project.',
+      code: rawCode || '23505 (Unique Violation)',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint: 'Please provide a distinct title for this questionnaire or choose another parent project.',
+    };
+  }
+
+  // 2. Row Level Security / Permission Denied (PostgreSQL code 42501)
+  if (
+    rawCode === '42501' ||
+    /row-level security|permission denied|violates.*policy|unauthorized/i.test(rawMessage)
+  ) {
+    return {
+      title: 'Permission Denied by Row-Level Security (RLS)',
+      friendlyMessage:
+        'Supabase database security policies prevented creating this questionnaire. Questionnaire authoring is restricted to active Researchers and Administrators.',
+      code: rawCode || '42501 (Insufficient Privilege)',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint:
+        'Ensure your authenticated profile has the "researcher" or "admin" role with "active" status in Supabase public.profiles.',
+    };
+  }
+
+  // 3. Foreign Key Violation (PostgreSQL code 23503)
+  if (rawCode === '23503' || /foreign key constraint|violates foreign key/i.test(rawMessage)) {
+    return {
+      title: 'Referenced Project Not Found in Database',
+      friendlyMessage:
+        'The selected research project was not found in the Supabase public.projects table (foreign key validation failed).',
+      code: rawCode || '23503 (Foreign Key Violation)',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint:
+        'Ensure the project is saved to Supabase (look for the "✓ Supabase DB" indicator in the project list).',
+    };
+  }
+
+  // 4. Not Null Constraint Violation (PostgreSQL code 23502)
+  if (rawCode === '23502' || /violates not-null constraint|null value in column/i.test(rawMessage)) {
+    return {
+      title: 'Mandatory Field Missing in Database Payload',
+      friendlyMessage:
+        'A required database field received a null value during questionnaire insertion.',
+      code: rawCode || '23502 (Not Null Violation)',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint: 'Verify that all required fields (title, version number, parent project) are filled.',
+    };
+  }
+
+  // 5. Auth / JWT Session expired
+  if (/jwt|session|auth|token|refresh token|unauthenticated/i.test(rawMessage)) {
+    return {
+      title: 'Supabase Authentication Session Expired',
+      friendlyMessage:
+        'Your database authentication session is inactive or could not be verified. You must be signed in to author questionnaires.',
+      code: rawCode || 'AUTH_SESSION_EXPIRED',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint: 'Please sign in again or reload the page to refresh your authentication token.',
+    };
+  }
+
+  // 6. Network connection failure
+  if (/failed to fetch|networkerror|connection refused|timeout/i.test(rawMessage)) {
+    return {
+      title: 'Supabase Cloud Connection Failed',
+      friendlyMessage:
+        'Unable to communicate with the Supabase database endpoint. The service could not be reached over the network.',
+      code: 'NETWORK_ERROR',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint:
+        'Check your network connection. Your entered form values are preserved below so you can retry.',
+    };
+  }
+
+  // 7. Invalid Project UUID check
+  if (/invalid project uuid/i.test(rawMessage)) {
+    return {
+      title: 'Invalid Target Project UUID',
+      friendlyMessage:
+        'Questionnaires must be linked to a valid Supabase project record with a standard UUID identifier.',
+      code: 'INVALID_PROJECT_UUID',
+      technicalDetails: technicalDetails || rawMessage,
+      actionHint: 'Please select a project with a valid Supabase database record from the dropdown.',
+    };
+  }
+
+  // 8. General fallback
+  return {
+    title: 'Supabase Questionnaire Creation Failed',
+    friendlyMessage: rawMessage.replace(/^[A-Za-z]+:\s*/, ''),
+    code: rawCode || 'SUPABASE_ERROR',
+    technicalDetails: technicalDetails || rawMessage,
+    actionHint:
+      'The form remains editable below. Review your inputs and click "Create Questionnaire in DB" to retry.',
+  };
+}
+
 export interface CreateQuestionnaireResult {
   data: {
     questionnaire: DbQuestionnaire;
     version: DbQuestionnaireVersion;
   } | null;
   error: string | null;
+  errorCode?: string | null;
+  errorDetails?: string | null;
+  parsedError?: FormattedSupabaseError;
 }
 
-export async function fetchProjectQuestionnaires(projectId: string): Promise<DbQuestionnaire[]> {
+export async function fetchProjectQuestionnaires(projectId: string): Promise<{
+  data: DbQuestionnaire[];
+  error: string | null;
+}> {
   try {
     const { data, error } = await supabase
       .from('questionnaires')
@@ -309,14 +485,34 @@ export async function fetchProjectQuestionnaires(projectId: string): Promise<DbQ
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('[RDIP DB] Failed to fetch questionnaires:', error.message);
-      return [];
+      console.warn('[RDIP DB] Primary questionnaire fetch notice:', error.message);
+      // Fallback query without specific constraint name in case PostgREST cache differs
+      const { data: fallbackData, error: fallbackErr } = await supabase
+        .from('questionnaires')
+        .select('*, current_version:questionnaire_versions(*)')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false });
+
+      if (fallbackErr) {
+        // Simple select if nested queries fail
+        const { data: simpleData, error: simpleErr } = await supabase
+          .from('questionnaires')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+
+        if (simpleErr) {
+          return { data: [], error: simpleErr.message };
+        }
+        return { data: (simpleData || []) as DbQuestionnaire[], error: null };
+      }
+      return { data: (fallbackData || []) as DbQuestionnaire[], error: null };
     }
 
-    return (data || []) as DbQuestionnaire[];
-  } catch (err) {
+    return { data: (data || []) as DbQuestionnaire[], error: null };
+  } catch (err: any) {
     console.error('[RDIP DB] fetchProjectQuestionnaires error:', err);
-    return [];
+    return { data: [], error: err?.message || 'Failed to connect to Supabase database.' };
   }
 }
 
@@ -374,9 +570,15 @@ export async function createQuestionnaireInDb(
     // 1. Authenticated session validation
     const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr || !authData?.user) {
+      const parsed = formatSupabaseError(
+        authErr || 'Authentication required: You must be signed in with a researcher account to author questionnaires.'
+      );
       return {
         data: null,
-        error: 'Authentication required: You must be signed in with a researcher account to author questionnaires.',
+        error: parsed.friendlyMessage,
+        errorCode: parsed.code,
+        errorDetails: parsed.technicalDetails,
+        parsedError: parsed,
       };
     }
     const userId = authData.user.id;
@@ -384,30 +586,75 @@ export async function createQuestionnaireInDb(
     // 2. Validate project UUID
     const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!params.project_id || !UUID_REGEX.test(params.project_id)) {
+      const parsed = formatSupabaseError(
+        'Invalid Project UUID: Questionnaires must be associated with a valid Supabase project record.'
+      );
       return {
         data: null,
-        error: 'Invalid Project UUID: Questionnaires must be associated with a valid Supabase project record.',
+        error: parsed.friendlyMessage,
+        errorCode: parsed.code,
+        errorDetails: parsed.technicalDetails,
+        parsedError: parsed,
       };
     }
 
     // 3. User profile & role permission check
-    const { data: creatorProfile } = await supabase
+    let { data: creatorProfile, error: profileLookupErr } = await supabase
       .from('profiles')
       .select('id, role, status')
       .eq('id', userId)
       .maybeSingle();
 
+    if (profileLookupErr) {
+      console.warn('[RDIP DB] Creator profile lookup note:', profileLookupErr);
+    }
+
+    if (!creatorProfile) {
+      console.warn('[RDIP DB] Profile not found in public.profiles. Attempting initialization...');
+      const userEmail = authData.user.email || '';
+      try {
+        await supabase.from('profiles').upsert({
+          id: userId,
+          email: userEmail,
+          full_name: authData.user.user_metadata?.full_name || userEmail.split('@')[0] || 'Researcher',
+          institution: authData.user.user_metadata?.institution || 'Research Institute',
+          role: 'researcher',
+          status: 'active',
+        });
+        const { data: retriedProfile } = await supabase
+          .from('profiles')
+          .select('id, role, status')
+          .eq('id', userId)
+          .maybeSingle();
+        creatorProfile = retriedProfile;
+      } catch (upsertErr) {
+        console.debug('[RDIP DB] Profile auto-provisioning note:', upsertErr);
+      }
+    }
+
     if (creatorProfile) {
       if (creatorProfile.status !== 'active') {
+        const parsed = formatSupabaseError(
+          `Permission denied: Account status is '${creatorProfile.status}'. Active status required to create questionnaires.`
+        );
         return {
           data: null,
-          error: `Permission denied: Account status is '${creatorProfile.status}'. Active status required to create questionnaires.`,
+          error: parsed.friendlyMessage,
+          errorCode: 'ACCOUNT_INACTIVE',
+          errorDetails: `Account status is '${creatorProfile.status}'. Active status required.`,
+          parsedError: parsed,
         };
       }
       if (creatorProfile.role === 'enumerator') {
+        const parsed = formatSupabaseError(
+          'Permission denied: Field enumerators cannot author questionnaires. Researcher role required.'
+        );
         return {
           data: null,
-          error: 'Permission denied: Field enumerators cannot author questionnaires. Researcher role required.',
+          error: parsed.friendlyMessage,
+          errorCode: 'ROLE_UNAUTHORIZED',
+          errorDetails: 'Field enumerators cannot author questionnaires. Researcher or Admin role required.',
+          parsedError: parsed,
         };
       }
     }
@@ -420,9 +667,15 @@ export async function createQuestionnaireInDb(
       .maybeSingle();
 
     if (projErr || !projectRow) {
+      const parsed = formatSupabaseError(
+        projErr || 'Target project not found in Supabase: Project does not exist or access denied.'
+      );
       return {
         data: null,
-        error: `Target project not found in Supabase: ${projErr?.message || 'Project does not exist or access denied.'}`,
+        error: parsed.friendlyMessage,
+        errorCode: projErr?.code || 'PROJECT_NOT_FOUND',
+        errorDetails: projErr?.details || projErr?.message || 'Project not found in public.projects.',
+        parsedError: parsed,
       };
     }
 
@@ -466,9 +719,13 @@ export async function createQuestionnaireInDb(
 
     if (qInsertError) {
       console.error('[RDIP DB] Failed to insert questionnaire into Supabase:', qInsertError);
+      const parsed = formatSupabaseError(qInsertError);
       return {
         data: null,
-        error: `Failed to insert questionnaire: ${qInsertError.message}`,
+        error: parsed.friendlyMessage,
+        errorCode: qInsertError.code,
+        errorDetails: qInsertError.details || qInsertError.hint || qInsertError.message,
+        parsedError: parsed,
       };
     }
 
@@ -495,9 +752,13 @@ export async function createQuestionnaireInDb(
       } catch (cleanupErr) {
         console.debug('[RDIP DB] Questionnaire cleanup note:', cleanupErr);
       }
+      const parsed = formatSupabaseError(vInsertError);
       return {
         data: null,
-        error: `Failed to insert initial draft version: ${vInsertError.message}`,
+        error: parsed.friendlyMessage,
+        errorCode: vInsertError.code,
+        errorDetails: vInsertError.details || vInsertError.hint || vInsertError.message,
+        parsedError: parsed,
       };
     }
 
@@ -624,20 +885,6 @@ export async function createQuestionnaireInDb(
       .eq('id', newVersionId)
       .maybeSingle();
 
-    const finalQuestionnaire: DbQuestionnaire = (fetchedQ as DbQuestionnaire) || {
-      id: newQuestionnaireId,
-      project_id: params.project_id,
-      created_by: userId,
-      name: questionnairePayload.name,
-      description: questionnairePayload.description,
-      status: 'draft',
-      current_version_id: newVersionId,
-      metadata: questionnairePayload.metadata,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      current_version: (fetchedV as DbQuestionnaireVersion) || undefined,
-    };
-
     const finalVersion: DbQuestionnaireVersion = (fetchedV as DbQuestionnaireVersion) || {
       id: newVersionId,
       questionnaire_id: newQuestionnaireId,
@@ -650,6 +897,20 @@ export async function createQuestionnaireInDb(
       updated_at: new Date().toISOString(),
     };
 
+    const finalQuestionnaire: DbQuestionnaire = (fetchedQ as DbQuestionnaire) || {
+      id: newQuestionnaireId,
+      project_id: params.project_id,
+      created_by: userId,
+      name: questionnairePayload.name,
+      description: questionnairePayload.description,
+      status: 'draft',
+      current_version_id: newVersionId,
+      metadata: questionnairePayload.metadata,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      current_version: (fetchedQ as any)?.current_version || finalVersion,
+    };
+
     return {
       data: {
         questionnaire: finalQuestionnaire,
@@ -659,9 +920,13 @@ export async function createQuestionnaireInDb(
     };
   } catch (err: any) {
     console.error('[RDIP DB] createQuestionnaireInDb fatal error:', err);
+    const parsed = formatSupabaseError(err);
     return {
       data: null,
-      error: err?.message || 'An unexpected error occurred while creating the questionnaire in Supabase.',
+      error: parsed.friendlyMessage,
+      errorCode: parsed.code,
+      errorDetails: parsed.technicalDetails,
+      parsedError: parsed,
     };
   }
 }
@@ -748,6 +1013,571 @@ export async function saveQuestionnaireDraftInDb(params: {
   } catch (err: any) {
     console.error('[RDIP DB] saveQuestionnaireDraftInDb error:', err);
     return { success: false, error: err?.message || 'Failed to save questionnaire draft.' };
+  }
+}
+
+// ==============================================================================
+// PHASE 5: QUESTIONNAIRE VERSIONING DATABASE SERVICE
+// ==============================================================================
+
+export interface CreateQuestionnaireVersionParams {
+  questionnaire_id: string; // Target questionnaire UUID
+  source_version_id?: string; // Source version to branch from
+  version_number?: string; // e.g. "v1.1" or "v2.0"
+  version_title?: string;
+  version_description?: string;
+  questions?: Question[]; // Snapshot questions
+  metadata?: Record<string, any>;
+  is_major?: boolean;
+  set_as_current?: boolean; // Defaults to true
+}
+
+export interface CreateVersionResult {
+  data: {
+    version: DbQuestionnaireVersion;
+    questionnaire: DbQuestionnaire;
+    questions: Question[];
+  } | null;
+  error: string | null;
+  errorCode?: string | null;
+  errorDetails?: string | null;
+  parsedError?: FormattedSupabaseError;
+}
+
+/**
+ * Predictable version number calculator
+ * If highest version is v1.0 -> minor increment yields v1.1
+ * If major increment requested -> yields v2.0
+ */
+export function calculateNextVersionNumber(
+  existingVersions: { version_number: string }[],
+  isMajor = false
+): string {
+  if (!existingVersions || existingVersions.length === 0) {
+    return isMajor ? 'v2.0' : 'v1.1';
+  }
+
+  let highestMajor = 1;
+  let highestMinor = 0;
+
+  for (const ver of existingVersions) {
+    const match = ver.version_number?.match(/^v?(\d+)\.(\d+)/i);
+    if (match) {
+      const maj = parseInt(match[1], 10);
+      const min = parseInt(match[2], 10);
+      if (maj > highestMajor) {
+        highestMajor = maj;
+        highestMinor = min;
+      } else if (maj === highestMajor && min > highestMinor) {
+        highestMinor = min;
+      }
+    }
+  }
+
+  if (isMajor) {
+    return `v${highestMajor + 1}.0`;
+  }
+  return `v${highestMajor}.${highestMinor + 1}`;
+}
+
+/**
+ * Fetch all versions belonging to a questionnaire from public.questionnaire_versions
+ */
+export async function fetchQuestionnaireVersions(questionnaireId: string): Promise<{
+  data: DbQuestionnaireVersion[];
+  error: string | null;
+}> {
+  try {
+    const { data, error } = await supabase
+      .from('questionnaire_versions')
+      .select('*')
+      .eq('questionnaire_id', questionnaireId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('[RDIP DB] fetchQuestionnaireVersions error:', error.message);
+      return { data: [], error: error.message };
+    }
+
+    return { data: (data || []) as DbQuestionnaireVersion[], error: null };
+  } catch (err: any) {
+    console.error('[RDIP DB] fetchQuestionnaireVersions exception:', err);
+    return { data: [], error: err?.message || 'Failed to fetch questionnaire versions.' };
+  }
+}
+
+/**
+ * Retrieve a specific version by its UUID, including its normalized questions
+ */
+export async function fetchQuestionnaireVersionById(versionId: string): Promise<{
+  version: DbQuestionnaireVersion | null;
+  questions: Question[];
+  error: string | null;
+}> {
+  try {
+    const { data: version, error: vErr } = await supabase
+      .from('questionnaire_versions')
+      .select('*')
+      .eq('id', versionId)
+      .maybeSingle();
+
+    if (vErr || !version) {
+      return {
+        version: null,
+        questions: [],
+        error: vErr?.message || 'Version not found in Supabase.',
+      };
+    }
+
+    // Check schema_definition.questions first
+    if (
+      version.schema_definition?.questions &&
+      Array.isArray(version.schema_definition.questions) &&
+      version.schema_definition.questions.length > 0
+    ) {
+      return {
+        version: version as DbQuestionnaireVersion,
+        questions: version.schema_definition.questions as Question[],
+        error: null,
+      };
+    }
+
+    // Fallback to relational questions table
+    const { data: qRows, error: qErr } = await supabase
+      .from('questions')
+      .select('*, options:question_options(*)')
+      .eq('questionnaire_version_id', versionId)
+      .order('display_order', { ascending: true });
+
+    if (qErr || !qRows || qRows.length === 0) {
+      return {
+        version: version as DbQuestionnaireVersion,
+        questions: [],
+        error: null,
+      };
+    }
+
+    // Convert relational DbQuestion to Question
+    const mappedQuestions: Question[] = qRows.map((q: any) => ({
+      id: q.id,
+      number: q.question_number,
+      section: q.section || undefined,
+      title: q.question_text,
+      helpText: q.help_text || undefined,
+      variableName: q.variable_name,
+      variableLabel: q.variable_label || undefined,
+      type: q.question_type,
+      required: Boolean(q.required),
+      hasOtherOption: Boolean(q.has_other_option),
+      likertScale: q.likert_scale || undefined,
+      linkedObjective: q.linked_research_objective || undefined,
+      dataType: q.data_type,
+      measurementLevel: q.measurement_level,
+      validationRules: q.validation_rules || {},
+      logicRule: q.conditional_logic || undefined,
+      gpsConfig: q.gps_config || undefined,
+      options: (q.options || []).map((opt: any) => ({
+        id: opt.id,
+        label: opt.option_label,
+        numericCode: opt.numeric_code,
+      })),
+    }));
+
+    return {
+      version: version as DbQuestionnaireVersion,
+      questions: mappedQuestions,
+      error: null,
+    };
+  } catch (err: any) {
+    console.error('[RDIP DB] fetchQuestionnaireVersionById error:', err);
+    return {
+      version: null,
+      questions: [],
+      error: err?.message || 'Failed to fetch version from Supabase.',
+    };
+  }
+}
+
+/**
+ * Switch questionnaire's current_version_id pointer
+ */
+export async function updateQuestionnaireCurrentVersion(
+  questionnaireId: string,
+  versionId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData?.user) {
+      return { success: false, error: 'Authentication required to switch working version.' };
+    }
+
+    const { error: updErr } = await supabase
+      .from('questionnaires')
+      .update({
+        current_version_id: versionId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', questionnaireId);
+
+    if (updErr) {
+      return { success: false, error: updErr.message };
+    }
+
+    try {
+      await logAuditEvent({
+        user_id: authData.user.id,
+        action: 'QUESTIONNAIRE_VERSION_SWITCHED',
+        entity_type: 'questionnaire',
+        entity_id: questionnaireId,
+        details: { new_current_version_id: versionId },
+      });
+    } catch (auditErr) {
+      console.debug('[RDIP DB] Version switch audit note:', auditErr);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to switch current version.' };
+  }
+}
+
+/**
+ * Authoritative Supabase Questionnaire Version Creation (Phase 5)
+ * Workflow:
+ * 1. Authenticate researcher / reject field enumerators.
+ * 2. Verify target questionnaire.
+ * 3. Fetch existing versions, calculate next predictable version number, prevent duplicates.
+ * 4. Deep-clone source questions to enforce absolute version independence.
+ * 5. Insert new row in public.questionnaire_versions with status = 'draft' (never auto-published).
+ * 6. Populate relational questions and options rows.
+ * 7. Update questionnaire current_version_id pointer.
+ * 8. Log immutable audit event.
+ */
+export async function createQuestionnaireVersionInDb(
+  params: CreateQuestionnaireVersionParams
+): Promise<CreateVersionResult> {
+  try {
+    // 1. Authenticated session validation
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !authData?.user) {
+      const parsed = formatSupabaseError(
+        'Authentication required. Please sign in to create questionnaire versions.'
+      );
+      return {
+        data: null,
+        error: parsed.friendlyMessage,
+        errorCode: 'AUTH_REQUIRED',
+        parsedError: parsed,
+      };
+    }
+    const userId = authData.user.id;
+
+    // 2. Profile role validation
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, status')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profile?.role === 'enumerator') {
+      const parsed = formatSupabaseError(
+        'Permission Denied: Field enumerators cannot author or branch questionnaire versions. Researcher role required.'
+      );
+      return {
+        data: null,
+        error: parsed.friendlyMessage,
+        errorCode: '42501',
+        parsedError: parsed,
+      };
+    }
+
+    // 3. Verify target questionnaire exists
+    const { data: questionnaire, error: qErr } = await supabase
+      .from('questionnaires')
+      .select('*')
+      .eq('id', params.questionnaire_id)
+      .single();
+
+    if (qErr || !questionnaire) {
+      const parsed = formatSupabaseError(
+        `Target questionnaire not found in Supabase (ID: ${params.questionnaire_id}).`
+      );
+      return {
+        data: null,
+        error: parsed.friendlyMessage,
+        errorCode: 'NOT_FOUND',
+        parsedError: parsed,
+      };
+    }
+
+    // 4. Fetch existing versions to ensure uniqueness and calculate next version if needed
+    const { data: existingVersions, error: vListErr } = await supabase
+      .from('questionnaire_versions')
+      .select('*')
+      .eq('questionnaire_id', params.questionnaire_id)
+      .order('created_at', { ascending: false });
+
+    if (vListErr) {
+      console.warn('[RDIP DB] Error fetching existing versions:', vListErr.message);
+    }
+
+    const versionList = (existingVersions || []) as DbQuestionnaireVersion[];
+
+    // Determine version number
+    let targetVersionNumber = params.version_number?.trim();
+    if (!targetVersionNumber) {
+      targetVersionNumber = calculateNextVersionNumber(versionList, params.is_major);
+    } else {
+      if (!targetVersionNumber.startsWith('v') && !targetVersionNumber.startsWith('V')) {
+        targetVersionNumber = `v${targetVersionNumber}`;
+      }
+    }
+
+    // Check duplicate version constraint before inserting
+    const isDuplicate = versionList.some(
+      (v) => v.version_number?.toLowerCase() === targetVersionNumber!.toLowerCase()
+    );
+    if (isDuplicate) {
+      const parsed = formatSupabaseError({
+        message: `Version ${targetVersionNumber} already exists for questionnaire "${questionnaire.name}". Please provide a unique version number.`,
+        code: '23505',
+        details: 'Unique constraint violated on questionnaire_id, version_number.',
+      });
+      return {
+        data: null,
+        error: parsed.friendlyMessage,
+        errorCode: '23505',
+        errorDetails: parsed.technicalDetails,
+        parsedError: parsed,
+      };
+    }
+
+    // 5. Read source content (Critical Version Independence)
+    let sourceQuestions: Question[] = [];
+    let sourceVerNumber = 'v1.0';
+
+    if (params.questions && Array.isArray(params.questions) && params.questions.length > 0) {
+      sourceQuestions = params.questions;
+    } else {
+      // Find source version
+      const sourceVerId = params.source_version_id || questionnaire.current_version_id;
+      if (sourceVerId) {
+        const sourceVer = versionList.find((v) => v.id === sourceVerId);
+        if (sourceVer) {
+          sourceVerNumber = sourceVer.version_number;
+          if (
+            sourceVer.schema_definition?.questions &&
+            Array.isArray(sourceVer.schema_definition.questions)
+          ) {
+            sourceQuestions = sourceVer.schema_definition.questions;
+          }
+        }
+      }
+    }
+
+    // Deep clone questions with new independent IDs to enforce strict version independence
+    const clonedQuestions: Question[] = sourceQuestions.map((q, qIdx) => ({
+      ...JSON.parse(JSON.stringify(q)),
+      id: `q-${Date.now().toString().slice(-4)}-${qIdx + 1}`,
+      options: q.options
+        ? q.options.map((opt, optIdx) => ({
+            ...JSON.parse(JSON.stringify(opt)),
+            id: `opt-${Date.now().toString().slice(-4)}-${qIdx + 1}-${optIdx + 1}`,
+          }))
+        : undefined,
+    }));
+
+    // 6. Insert new version record in public.questionnaire_versions
+    const newVersionId = crypto.randomUUID();
+    const schemaDefinition = {
+      title: params.version_title || `${questionnaire.name} (${targetVersionNumber})`,
+      description: params.version_description || `Draft version created from ${sourceVerNumber}`,
+      questions: clonedQuestions,
+      version_number: targetVersionNumber,
+      source_version_id: params.source_version_id || null,
+      created_by: userId,
+      created_at: new Date().toISOString(),
+      metadata: {
+        ...(params.metadata || {}),
+        created_by: userId,
+      },
+    };
+
+    const versionPayload = {
+      id: newVersionId,
+      questionnaire_id: params.questionnaire_id,
+      version_number: targetVersionNumber,
+      status: 'draft' as const, // Strict rule: new version is always draft
+      title: params.version_title || `${questionnaire.name} (Draft ${targetVersionNumber})`,
+      description:
+        params.version_description || `Draft version branched from ${sourceVerNumber}`,
+      schema_definition: schemaDefinition,
+    };
+
+    const { error: vInsertErr } = await supabase
+      .from('questionnaire_versions')
+      .insert([versionPayload]);
+
+    if (vInsertErr) {
+      console.error('[RDIP DB] Error inserting new version into Supabase:', vInsertErr);
+      const parsed = formatSupabaseError(vInsertErr);
+      return {
+        data: null,
+        error: parsed.friendlyMessage,
+        errorCode: vInsertErr.code,
+        errorDetails: vInsertErr.details || vInsertErr.message,
+        parsedError: parsed,
+      };
+    }
+
+    // 7. Populate relational questions and options for this version
+    if (clonedQuestions.length > 0) {
+      try {
+        const validTypes = [
+          'multiple-choice',
+          'checkboxes',
+          'short-text',
+          'paragraph',
+          'likert',
+          'matrix',
+          'dropdown',
+          'date-time',
+          'number',
+          'geolocation',
+          'gps-coordinate',
+        ];
+
+        for (let idx = 0; idx < clonedQuestions.length; idx++) {
+          const q = clonedQuestions[idx];
+          const questionDbId = crypto.randomUUID();
+
+          let qType = q.type;
+          if (!validTypes.includes(qType)) qType = 'short-text' as any;
+
+          let dType = q.dataType || 'Categorical';
+          let mLevel = q.measurementLevel || 'Nominal';
+
+          await supabase.from('questions').insert([
+            {
+              id: questionDbId,
+              questionnaire_version_id: newVersionId,
+              question_number: q.number || `Q${idx + 1}`,
+              section: q.section || 'Section A',
+              question_text: q.title || `Question ${idx + 1}`,
+              help_text: q.helpText || null,
+              variable_name: q.variableName || `VAR_${idx + 1}`,
+              variable_label: q.variableLabel || q.title,
+              question_type: qType,
+              data_type: dType,
+              measurement_level: mLevel,
+              required: q.required ?? true,
+              has_other_option: Boolean(q.hasOtherOption),
+              likert_scale: q.likertScale ? Number(q.likertScale) : null,
+              linked_research_objective: q.linkedObjective || null,
+              validation_rules: q.validationRules || {},
+              conditional_logic: q.logicRule || {},
+              gps_config: q.gpsConfig || {},
+              display_order: idx + 1,
+            },
+          ]);
+
+          if (q.options && q.options.length > 0) {
+            for (let optIdx = 0; optIdx < q.options.length; optIdx++) {
+              const opt = q.options[optIdx];
+              await supabase.from('question_options').insert([
+                {
+                  id: crypto.randomUUID(),
+                  question_id: questionDbId,
+                  option_label: opt.label || `Option ${optIdx + 1}`,
+                  option_value: opt.id || `opt_${optIdx + 1}`,
+                  numeric_code: typeof opt.numericCode === 'number' ? opt.numericCode : optIdx + 1,
+                  display_order: optIdx + 1,
+                },
+              ]);
+            }
+          }
+        }
+      } catch (relationalPopulateErr) {
+        console.warn('[RDIP DB] Relational question population note:', relationalPopulateErr);
+      }
+    }
+
+    // 8. Update questionnaires.current_version_id if set_as_current is true (default)
+    const shouldSetCurrent = params.set_as_current !== false;
+    if (shouldSetCurrent) {
+      await supabase
+        .from('questionnaires')
+        .update({
+          current_version_id: newVersionId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', params.questionnaire_id);
+    }
+
+    // 9. Audit event
+    try {
+      await logAuditEvent({
+        user_id: userId,
+        action: 'QUESTIONNAIRE_VERSION_CREATED',
+        entity_type: 'questionnaire_version',
+        entity_id: newVersionId,
+        details: {
+          questionnaire_id: params.questionnaire_id,
+          questionnaire_name: questionnaire.name,
+          version_number: targetVersionNumber,
+          source_version_number: sourceVerNumber,
+          is_major: Boolean(params.is_major),
+          status: 'draft',
+          item_count: clonedQuestions.length,
+        },
+      });
+    } catch (auditErr) {
+      console.debug('[RDIP DB] Audit log note:', auditErr);
+    }
+
+    // 10. Fetch updated questionnaire and version
+    const { data: updatedQ } = await supabase
+      .from('questionnaires')
+      .select('*, current_version:questionnaire_versions!fk_questionnaires_current_version(*)')
+      .eq('id', params.questionnaire_id)
+      .maybeSingle();
+
+    const { data: createdVersion } = await supabase
+      .from('questionnaire_versions')
+      .select('*')
+      .eq('id', newVersionId)
+      .maybeSingle();
+
+    const returnVersion: DbQuestionnaireVersion = createdVersion
+      ? {
+          ...createdVersion,
+          created_by: (createdVersion.schema_definition as any)?.created_by || userId,
+        }
+      : {
+          ...versionPayload,
+          created_by: userId,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+    return {
+      data: {
+        version: returnVersion,
+        questionnaire: (updatedQ || questionnaire) as DbQuestionnaire,
+        questions: clonedQuestions,
+      },
+      error: null,
+    };
+  } catch (err: any) {
+    console.error('[RDIP DB] createQuestionnaireVersionInDb exception:', err);
+    const parsed = formatSupabaseError(err);
+    return {
+      data: null,
+      error: parsed.friendlyMessage,
+      errorCode: parsed.code,
+      errorDetails: parsed.technicalDetails,
+      parsedError: parsed,
+    };
   }
 }
 

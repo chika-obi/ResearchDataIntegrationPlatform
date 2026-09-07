@@ -518,7 +518,7 @@ export const LogicConditionBuilder: React.FC<LogicConditionBuilderProps> = ({
                                         className="w-full p-1.5 text-xs bg-white border border-[#c4c6cf] rounded focus:border-[#006a68] outline-none"
                                       >
                                         <option value="">Select option value...</option>
-                                        {selectedSourceQ.options.map((opt) => (
+                                        {(selectedSourceQ.options || []).map((opt) => (
                                           <option key={opt.id} value={opt.label}>
                                             {opt.label} {opt.numericCode ? `[${opt.numericCode}]` : ''}
                                           </option>

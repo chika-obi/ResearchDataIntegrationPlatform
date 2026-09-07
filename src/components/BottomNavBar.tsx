@@ -25,7 +25,11 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({ currentSection, onNa
       ];
 
   return (
-    <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-2 md:hidden bg-[#f9f9ff] shadow-[0_-1px_3px_rgba(0,0,0,0.1)] border-t border-[#c4c6cf]/40 rounded-t-xl">
+    <nav
+      className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-2 py-1.5 pb-2.5 sm:pb-2 md:hidden bg-[#f9f9ff]/95 backdrop-blur-md shadow-[0_-2px_10px_rgba(0,0,0,0.06)] border-t border-[#c4c6cf]/50"
+      style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0.625rem))' }}
+      aria-label="Mobile Navigation Bar"
+    >
       {items.map((item) => {
         const isActive =
           currentSection === item.id || (item.aliases && item.aliases.includes(currentSection));
@@ -33,21 +37,21 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({ currentSection, onNa
           <button
             key={item.id}
             onClick={() => onNavigate(item.id)}
-            className={`flex flex-col items-center justify-center transition-transform active:scale-95 py-1 px-3 rounded-xl min-w-[56px] ${
+            className={`flex flex-col items-center justify-center transition-all duration-150 active:scale-95 py-1 px-2.5 rounded-xl min-w-[54px] min-h-[48px] cursor-pointer ${
               isActive
-                ? 'bg-[#1a365d] text-white'
-                : 'text-[#43474e] hover:bg-[#f1f3ff]'
+                ? 'bg-[#1a365d] text-white shadow-xs'
+                : 'text-[#43474e] hover:bg-[#f1f3ff] hover:text-[#002045]'
             }`}
           >
             <span
-              className={`material-symbols-outlined text-[22px] mb-0.5 ${
+              className={`material-symbols-outlined text-[20px] mb-0.5 ${
                 isActive ? 'fill text-white' : 'text-[#43474e]'
               }`}
               style={isActive ? { fontVariationSettings: "'FILL' 1" } : undefined}
             >
               {item.icon}
             </span>
-            <span className="text-[11px] font-semibold leading-tight">{item.label}</span>
+            <span className="text-[10px] sm:text-[11px] font-semibold leading-tight">{item.label}</span>
           </button>
         );
       })}

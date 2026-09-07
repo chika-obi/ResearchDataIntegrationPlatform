@@ -37,7 +37,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   };
 
   return (
-    <div className="max-w-[1280px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Welcome Banner */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 md:p-6 rounded-2xl border border-[#c4c6cf]/50 card-shadow">
         <div className="flex items-start sm:items-center gap-4">

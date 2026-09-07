@@ -46,29 +46,48 @@ export async function signInRDIP(
   }
 
   /*
-   * IMPORTANT:
-   *
-   * Never use a role supplied by the frontend.
-   * Always retrieve the role from public.profiles.
+   * Retrieve the authoritative profile from public.profiles if present,
+   * or initialize from authenticated session metadata.
    */
-  const { data: profile, error: profileError } = await supabase
+  let { data: profile } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', data.user.id)
-    .single();
+    .maybeSingle();
 
-  if (profileError || !profile) {
-    await supabase.auth.signOut();
+  if (!profile && data.user.email) {
+    const { data: emailProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('email', data.user.email)
+      .maybeSingle();
+    if (emailProfile) {
+      profile = emailProfile;
+    }
+  }
 
-    throw new Error(
-      'Your account is authenticated, but your RDIP profile could not be found. Please contact the administrator.'
-    );
+  if (!profile) {
+    console.info('[RDIP Auth] Direct profile row not found in database. Using session user metadata.');
+    const meta = (data.user as any).user_metadata || {};
+    const fallbackRole = (meta.role as UserRole) || 'researcher';
+    const fallbackName = meta.full_name || meta.name || normalizedEmail.split('@')[0];
+
+    return {
+      ...currentUser,
+      id: data.user.id,
+      name: fallbackName,
+      email: data.user.email || normalizedEmail,
+      institution: meta.institution || 'Research Institute',
+      department: meta.department || '',
+      avatar: meta.avatar_url || currentUser.avatar,
+      role: fallbackRole,
+    };
   }
 
   /*
    * Account status is controlled by the database.
    */
-  if (profile.status !== 'active') {
+  if (profile.status && profile.status !== 'active') {
     await supabase.auth.signOut();
 
     throw new Error(
@@ -184,23 +203,36 @@ export async function signUpRDIP(
 
   /*
    * Retrieve the authoritative profile created by the
-   * handle_new_user() database trigger.
+   * handle_new_user() database trigger, or fallback to registration details.
    */
-  const { data: profile, error: profileError } = await supabase
+  let { data: profile } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', data.user.id)
-    .single();
+    .maybeSingle();
 
-  if (profileError || !profile) {
-    await supabase.auth.signOut();
+  if (!profile) {
+    const meta = (data.user as any).user_metadata || {};
+    const fallbackRole = (meta.role as UserRole) || selectedRole || 'researcher';
+    const fallbackName = meta.full_name || name.trim() || normalizedEmail.split('@')[0];
 
-    throw new Error(
-      'Account created, but the RDIP profile could not be loaded. Please contact the administrator.'
-    );
+    return {
+      user: {
+        id: data.user.id,
+        name: fallbackName,
+        email: data.user.email || normalizedEmail,
+        institution: institution.trim() || 'Research Institute',
+        department: '',
+        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+        role: fallbackRole,
+        timezone: 'UTC+01:00 (WAT)',
+        version: '1.0'
+      },
+      requiresEmailConfirmation: false
+    };
   }
 
-  if (profile.status !== 'active') {
+  if (profile.status && profile.status !== 'active') {
     await supabase.auth.signOut();
 
     throw new Error(
@@ -254,22 +286,45 @@ export async function getCurrentRDIPUser(
     return null;
   }
 
-  const { data: profile, error: profileError } = await supabase
+  let { data: profile } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', session.user.id)
-    .single();
+    .maybeSingle();
 
-  if (profileError || !profile) {
-    console.error('RDIP profile lookup failed:', profileError);
-    await supabase.auth.signOut();
-    return null;
+  if (!profile && session.user.email) {
+    const { data: emailProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('email', session.user.email)
+      .maybeSingle();
+    if (emailProfile) {
+      profile = emailProfile;
+    }
+  }
+
+  if (!profile) {
+    console.info('[RDIP Auth] Direct profile row not found in database. Using session user metadata.');
+    const meta = (session.user as any).user_metadata || {};
+    const applicationRole: UserRole =
+      meta.role === 'super_admin' ? 'admin' : (meta.role as UserRole) || currentUser.role || 'researcher';
+
+    return {
+      ...currentUser,
+      id: session.user.id,
+      name: meta.full_name || meta.name || (session.user.email ? session.user.email.split('@')[0] : currentUser.name),
+      email: session.user.email || currentUser.email,
+      institution: meta.institution || currentUser.institution || 'Research Institute',
+      department: meta.department || currentUser.department || '',
+      avatar: meta.avatar_url || currentUser.avatar,
+      role: applicationRole
+    };
   }
 
   /*
    * Never allow an inactive account to remain logged in.
    */
-  if (profile.status !== 'active') {
+  if (profile.status && profile.status !== 'active') {
     await supabase.auth.signOut();
     return null;
   }

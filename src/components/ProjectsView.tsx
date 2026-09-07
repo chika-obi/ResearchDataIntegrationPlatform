@@ -12,7 +12,7 @@ interface ProjectsViewProps {
 }
 
 export const ProjectsView: React.FC<ProjectsViewProps> = ({
-  projects,
+  projects = [],
   onOpenCreateProject,
   onNavigate,
   onSelectProject,
@@ -64,7 +64,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
   };
 
   const filteredProjects = useMemo(() => {
-    return projects.filter((p) => {
+    return (projects || []).filter((p) => {
       const matchesSearch =
         p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         p.institution.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -95,7 +95,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
   };
 
   return (
-    <div className="max-w-[1280px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Page Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -565,7 +565,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                     Target Research Objectives
                   </h4>
                   <ul className="space-y-1">
-                    {selectedProjectForModal.researchObjectives.map((obj, i) => (
+                    {(selectedProjectForModal?.researchObjectives || []).map((obj, i) => (
                       <li
                         key={i}
                         className="flex items-center gap-2 p-2 bg-white rounded-lg border border-[#c4c6cf]/30 text-xs text-[#43474e]"
@@ -618,7 +618,11 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => {
+                    const targetProj = selectedProjectForModal;
                     setSelectedProjectForModal(null);
+                    if (targetProj && onSelectProject) {
+                      onSelectProject(targetProj);
+                    }
                     onNavigate('questionnaires');
                   }}
                   className="px-4 py-2 rounded-xl text-xs font-bold border border-[#c4c6cf] text-[#002045] hover:bg-[#f1f3ff] transition-colors cursor-pointer"
@@ -627,7 +631,11 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                 </button>
                 <button
                   onClick={() => {
+                    const targetProj = selectedProjectForModal;
                     setSelectedProjectForModal(null);
+                    if (targetProj && onSelectProject) {
+                      onSelectProject(targetProj);
+                    }
                     onNavigate('statistical-analysis');
                   }}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-[#1a365d] text-white hover:bg-[#002045] transition-colors shadow-2xs cursor-pointer"

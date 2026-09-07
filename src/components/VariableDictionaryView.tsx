@@ -121,7 +121,7 @@ export const VariableDictionaryView: React.FC = () => {
             (v) =>
               `"${v.variableName}","${v.label}","${v.dataType}","${v.measurementLevel}","${v.linkedObjective}","${
                 v.missingValueCode
-              }","${v.valueLabels.map((l) => `${l.code}=${l.label}`).join('; ')}"`
+              }","${(v.valueLabels || []).map((l) => `${l.code}=${l.label}`).join('; ')}"`
           )
         )
         .join('\n');
@@ -136,7 +136,7 @@ export const VariableDictionaryView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="min-w-0">

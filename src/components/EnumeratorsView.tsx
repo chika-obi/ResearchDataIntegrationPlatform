@@ -144,7 +144,7 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
   };
 
   return (
-    <div className="max-w-[1280px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Page Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -286,7 +286,7 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
                             <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] ${
                               isSelected ? 'bg-[#1a365d] text-white' : 'bg-[#e3e8f9] text-[#002045]'
                             }`}>
-                              {item.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                              {(item.name || 'Enumerator').split(' ').filter(Boolean).map(n => n[0]).join('').slice(0, 2)}
                             </div>
                             <div>
                               <span className="font-bold text-[#161c27] block">{item.name}</span>

@@ -99,7 +99,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="max-w-[1000px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full max-w-4xl mx-auto space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Header */}
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-[#002045] tracking-tight">

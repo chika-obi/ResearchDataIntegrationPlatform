@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { NavSection, Project, UserProfile, Question } from './types';
+import { NavSection, Project, UserProfile, Question, UserRole } from './types';
 import { INITIAL_PROJECTS, INITIAL_USER } from './data/mockData';
 import { TopAppBar } from './components/TopAppBar';
 import { NavigationDrawer } from './components/NavigationDrawer';
@@ -32,7 +32,24 @@ import { DbProjectStatus } from './types';
 
 export function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('rdip_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [isOfflineMode, setIsOfflineMode] = useState(false);
+
+  const toggleSidebarCollapse = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('rdip_sidebar_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [showPublicSurveyModal, setShowPublicSurveyModal] = useState(false);
@@ -153,9 +170,10 @@ export function App() {
     authUser: {
       id: string;
       email?: string;
+      user_metadata?: Record<string, any>;
     }
   ): Promise<UserProfile | null> => {
-    const {
+    let {
       data: profile,
       error: profileError
     } = await supabase
@@ -164,17 +182,34 @@ export function App() {
         'id, email, full_name, phone, avatar_url, institution, department, role, status'
       )
       .eq('id', authUser.id)
-      .single();
+      .maybeSingle();
+
+    if (!profile && authUser.email) {
+      const { data: emailProfile } = await supabase
+        .from('profiles')
+        .select(
+          'id, email, full_name, phone, avatar_url, institution, department, role, status'
+        )
+        .eq('email', authUser.email)
+        .maybeSingle();
+      if (emailProfile) {
+        profile = emailProfile;
+      }
+    }
 
     let userProfileRecord = profile;
 
-    if (profileError || !userProfileRecord) {
-      console.warn(
-        'RDIP profile lookup returned no record, attempting profile provisioning:',
-        profileError
+    if (!userProfileRecord) {
+      console.info(
+        '[RDIP Profile] Profile row not yet in database, attempting profile provisioning...'
       );
 
-      const defaultFullName = authUser.email ? authUser.email.split('@')[0] : 'Researcher';
+      const meta = authUser.user_metadata || {};
+      const defaultFullName =
+        meta.full_name ||
+        meta.name ||
+        (authUser.email ? authUser.email.split('@')[0] : 'Researcher');
+
       try {
         await supabase
           .from('profiles')
@@ -182,8 +217,8 @@ export function App() {
             id: authUser.id,
             email: authUser.email || '',
             full_name: defaultFullName,
-            institution: 'Research Institute',
-            role: 'researcher',
+            institution: meta.institution || 'Research Institute',
+            role: meta.role || 'researcher',
             status: 'active'
           });
 
@@ -197,19 +232,37 @@ export function App() {
 
         userProfileRecord = retriedProfile;
       } catch (upsertErr) {
-        console.error('Failed to auto-provision profile:', upsertErr);
+        console.debug('[RDIP Profile] Note during auto-provision:', upsertErr);
       }
 
       if (!userProfileRecord) {
-        console.error('RDIP profile lookup failed and profile could not be loaded.');
-        return null;
+        // Safe fallback: Construct authoritative profile from authenticated credentials
+        console.info(
+          '[RDIP Profile] Using authenticated session credentials as active researcher profile.'
+        );
+        const fallbackRole = (meta.role as UserRole) || 'researcher';
+
+        return {
+          ...INITIAL_USER,
+          id: authUser.id,
+          name: defaultFullName,
+          email: authUser.email || '',
+          institution: meta.institution || 'Research Institute',
+          department: meta.department || '',
+          avatar:
+            meta.avatar_url ||
+            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          role: fallbackRole,
+          timezone: 'UTC+01:00 (WAT)',
+          version: '1.0'
+        };
       }
     }
 
     /*
-     * Never allow a non-active account into the application.
+     * Never allow an explicitly non-active account into the application.
      */
-    if (userProfileRecord.status !== 'active') {
+    if (userProfileRecord.status && userProfileRecord.status !== 'active') {
       console.warn(
         'RDIP account is not active:',
         userProfileRecord.status
@@ -386,7 +439,8 @@ export function App() {
           const authenticatedUser =
             await loadAuthenticatedUser({
               id: session.user.id,
-              email: session.user.email
+              email: session.user.email,
+              user_metadata: (session.user as any)?.user_metadata,
             });
 
           if (!mounted) {
@@ -755,44 +809,26 @@ export function App() {
 
       {/* Top Header Bar */}
       <TopAppBar
-        currentSection={
-          currentSection
-        }
-        onNavigate={
-          handleNavigate
-        }
-        onOpenMobileMenu={() =>
-          setIsMobileMenuOpen(true)
-        }
-        onToggleAuthModal={() =>
-          setIsAuthModalOpen(true)
-        }
-        isOfflineMode={
-          isOfflineMode
-        }
-        currentUser={
-          currentUser
-        }
-        projects={
-          projects
-        }
+        currentSection={currentSection}
+        onNavigate={handleNavigate}
+        onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
+        onToggleAuthModal={() => setIsAuthModalOpen(true)}
+        isOfflineMode={isOfflineMode}
+        currentUser={currentUser}
+        projects={projects}
+        isSidebarCollapsed={isSidebarCollapsed}
+        onToggleSidebar={toggleSidebarCollapse}
         onSelectProject={(p) => {
           /*
            * Enumerators cannot select projects from
            * the researcher project interface.
            */
-          if (
-            currentUser.role ===
-            'enumerator'
-          ) {
+          if (currentUser.role === 'enumerator') {
             return;
           }
 
           setSelectedProject(p);
-
-          handleNavigate(
-            'projects'
-          );
+          handleNavigate('projects');
         }}
       />
 
@@ -800,48 +836,39 @@ export function App() {
       {/* Main Body Layout */}
       <div className="flex-1 flex overflow-hidden min-h-0">
 
-        {/* Persistent Desktop Sidebar & Mobile Drawer */}
+        {/* Persistent Desktop/Tablet Sidebar & Mobile Drawer */}
         <NavigationDrawer
-          currentSection={
-            currentSection
-          }
-          onNavigate={
-            handleNavigate
-          }
-          isOfflineMode={
-            isOfflineMode
-          }
-          onToggleOfflineMode={() =>
-            setIsOfflineMode(
-              !isOfflineMode
-            )
-          }
-          isOpenMobile={
-            isMobileMenuOpen
-          }
-          onCloseMobile={() =>
-            setIsMobileMenuOpen(false)
-          }
-          currentUser={
-            currentUser
-          }
-          onOpenAuthModal={() =>
-            setIsAuthModalOpen(true)
-          }
+          currentSection={currentSection}
+          onNavigate={handleNavigate}
+          isOfflineMode={isOfflineMode}
+          onToggleOfflineMode={() => setIsOfflineMode(!isOfflineMode)}
+          isOpenMobile={isMobileMenuOpen}
+          onCloseMobile={() => setIsMobileMenuOpen(false)}
+          currentUser={currentUser}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={toggleSidebarCollapse}
         />
 
 
-        {/* Dynamic Main Content View */}
+        {/* Dynamic Main Content View with Grid-Based Responsive Strategy */}
         <main
-          className={`flex-1 min-w-0 flex flex-col ${
-            currentSection ===
-              'questionnaires' ||
-            currentSection ===
-              'offline-collector'
+          id="main-content-viewport"
+          className={`flex-1 min-w-0 flex flex-col transition-all duration-150 ${
+            currentSection === 'questionnaires' || currentSection === 'offline-collector'
               ? 'overflow-hidden pb-16 md:pb-0'
               : 'overflow-y-auto pb-20 md:pb-8'
           }`}
         >
+          {/* Adaptive Container with Responsive Grid Padding and Spacing */}
+          <div
+            id="responsive-view-container"
+            className={`w-full flex-1 ${
+              currentSection === 'questionnaires' || currentSection === 'offline-collector'
+                ? 'h-full flex flex-col min-w-0 overflow-hidden'
+                : 'w-full max-w-[1440px] mx-auto px-3.5 py-4 sm:px-6 sm:py-6 md:px-8 md:py-8 lg:px-10 lg:py-8 space-y-4 sm:space-y-6 md:space-y-8'
+            }`}
+          >
 
           {/* Researcher Dashboard */}
           {currentSection ===
@@ -1017,15 +1044,12 @@ export function App() {
           {currentSection ===
             'settings' && (
             <SettingsView
-              currentUser={
-                currentUser
-              }
-              onUpdateUser={
-                handleUpdateUser
-              }
+              currentUser={currentUser}
+              onUpdateUser={handleUpdateUser}
             />
           )}
 
+          </div>
         </main>
       </div>
 

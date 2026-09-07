@@ -461,14 +461,14 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
                     {surveyVersion} • {activeQuestions.length} Questions Configured • Ready for Data Collection
                   </p>
                   <div className="flex items-center gap-2 mt-2 flex-wrap">
-                    {activeQuestions.slice(0, 4).map((q, idx) => (
+                    {(activeQuestions || []).slice(0, 4).map((q, idx) => (
                       <span key={q.id || idx} className="text-[10px] font-mono bg-white text-[#002045] px-2 py-0.5 rounded border border-[#c4c6cf]/40">
                         {q.variableName || `VAR_${idx + 1}`}
                       </span>
                     ))}
-                    {activeQuestions.length > 4 && (
+                    {(activeQuestions || []).length > 4 && (
                       <span className="text-[10px] text-[#74777f] font-semibold">
-                        +{activeQuestions.length - 4} more
+                        +{(activeQuestions || []).length - 4} more
                       </span>
                     )}
                   </div>
@@ -520,8 +520,8 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
             )}
 
             <div className="space-y-3">
-              {responsesList.length > 0 ? (
-                responsesList.map((resp) => {
+              {(responsesList || []).length > 0 ? (
+                (responsesList || []).map((resp) => {
                   const isPending = resp.status === 'Pending' || resp.syncStatus === 'pending';
                   return (
                     <div

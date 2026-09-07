@@ -17,6 +17,8 @@ import { PublicSurveyModal } from './PublicSurveyModal';
 import { LogicConditionBuilder } from './LogicConditionBuilder';
 import { LogicImportExportModal } from './LogicImportExportModal';
 import { CreateQuestionnaireModal } from './CreateQuestionnaireModal';
+import { VersionHistoryModal } from './VersionHistoryModal';
+import { CreateVersionModal } from './CreateVersionModal';
 import { formatLogicExpression } from '../lib/surveyLogicEvaluator';
 import { downloadLogicFlowJSON } from '../lib/logicImportExport';
 import { GeolocationFieldRenderer } from './GeolocationFieldRenderer';
@@ -24,10 +26,15 @@ import {
   fetchProjectQuestionnaires,
   createQuestionnaireInDb,
   saveQuestionnaireDraftInDb,
+  fetchQuestionnaireVersionById,
   CreateQuestionnaireParams,
+  CreateQuestionnaireResult,
+  FormattedSupabaseError,
+  formatSupabaseError,
 } from '../lib/rdipDatabaseService';
 
 export const ensureQuestionsStartWithQ1 = (items: Question[]): Question[] => {
+  if (!items || !Array.isArray(items)) return [];
   return items.map((q, idx) => ({
     ...q,
     number: `Q${idx + 1}`
@@ -93,19 +100,25 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   const [copiedFieldLink, setCopiedFieldLink] = useState(false);
   const [copiedPublicLink, setCopiedPublicLink] = useState(false);
   const [bankSearch, setBankSearch] = useState('');
+  const [outlineSearch, setOutlineSearch] = useState('');
+  const [leftSidebarTab, setLeftSidebarTab] = useState<'bank' | 'outline'>('bank');
   const [isQuestionBankOpen, setIsQuestionBankOpen] = useState(true);
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
-  const [mobileActiveTab, setMobileActiveTab] = useState<'canvas' | 'bank' | 'inspector'>('canvas');
+  const [mobileActiveTab, setMobileActiveTab] = useState<'canvas' | 'bank' | 'outline' | 'inspector'>('canvas');
 
   // Supabase Database Integration State
   const [projectQuestionnaires, setProjectQuestionnaires] = useState<DbQuestionnaire[]>([]);
   const [activeDbQuestionnaire, setActiveDbQuestionnaire] = useState<DbQuestionnaire | null>(null);
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
+  const [activeVersionRecord, setActiveVersionRecord] = useState<DbQuestionnaireVersion | null>(null);
+  const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false);
+  const [isCreateVersionModalOpen, setIsCreateVersionModalOpen] = useState(false);
   const [isDbLoading, setIsDbLoading] = useState(false);
   const [isSavingDb, setIsSavingDb] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [dbSyncStatus, setDbSyncStatus] = useState<'synced' | 'local_only' | 'error'>('local_only');
   const [dbStatusToast, setDbStatusToast] = useState<string | null>(null);
+  const [creationErrorAlert, setCreationErrorAlert] = useState<FormattedSupabaseError | null>(null);
 
   const selectedQuestion = questions.find((q) => q.id === selectedQuestionId) || questions[0];
 
@@ -118,14 +131,24 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       if (!selectedProject?.id || !UUID_REGEX.test(selectedProject.id)) {
         setProjectQuestionnaires([]);
         setActiveDbQuestionnaire(null);
+        setActiveVersionRecord(null);
         setDbSyncStatus('local_only');
         return;
       }
 
       setIsDbLoading(true);
       try {
-        const qList = await fetchProjectQuestionnaires(selectedProject.id);
+        const { data: qList, error: fetchErr } = await fetchProjectQuestionnaires(selectedProject.id);
         if (!isMounted) return;
+
+        if (fetchErr) {
+          console.warn('[RDIP Studio] Supabase questionnaire fetch error:', fetchErr);
+          setDbSyncStatus('error');
+          setDbStatusToast(`Failed to load questionnaires from Supabase: ${fetchErr}`);
+          setTimeout(() => setDbStatusToast(null), 5000);
+          return;
+        }
+
         setProjectQuestionnaires(qList);
 
         if (qList.length > 0) {
@@ -133,6 +156,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           setActiveDbQuestionnaire(latest);
           setSurveyTitle(latest.name);
           setActiveVersionId(latest.current_version_id || latest.current_version?.id || null);
+          setActiveVersionRecord(latest.current_version || null);
 
           const verNum = latest.current_version?.version_number || 'v1.0';
           const verStatus = latest.current_version?.status || 'draft';
@@ -152,11 +176,17 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           setDbSyncStatus('synced');
         } else {
           setActiveDbQuestionnaire(null);
-          setDbSyncStatus('local_only');
+          setActiveVersionId(null);
+          setActiveVersionRecord(null);
+          setDbSyncStatus('synced');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('[RDIP Studio] Supabase load notice:', err);
-        if (isMounted) setDbSyncStatus('error');
+        if (isMounted) {
+          setDbSyncStatus('error');
+          setDbStatusToast(`Database connection error: ${err?.message || 'Could not connect to Supabase'}`);
+          setTimeout(() => setDbStatusToast(null), 5000);
+        }
       } finally {
         if (isMounted) setIsDbLoading(false);
       }
@@ -175,6 +205,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     setActiveDbQuestionnaire(q);
     setSurveyTitle(q.name);
     setActiveVersionId(q.current_version_id || q.current_version?.id || null);
+    setActiveVersionRecord(q.current_version || null);
 
     const verNum = q.current_version?.version_number || 'v1.0';
     const verStatus = q.current_version?.status || 'draft';
@@ -192,43 +223,141 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     setDbSyncStatus('synced');
   };
 
+  const handleSelectVersion = async (versionId: string) => {
+    setDbSyncStatus('local_only');
+    try {
+      const res = await fetchQuestionnaireVersionById(versionId);
+      if (res.error || !res.version) {
+        setDbStatusToast(`Failed to load version: ${res.error || 'Version record not found.'}`);
+        setDbSyncStatus('synced');
+        return;
+      }
+
+      const { version, questions: verQuestions } = res;
+      setActiveVersionId(version.id);
+      setActiveVersionRecord(version);
+      const verStatus = version.status || 'draft';
+      setSurveyVersion(`${version.version_number} (${verStatus.toUpperCase()})`);
+
+      if (verQuestions && verQuestions.length > 0) {
+        const normalized = ensureQuestionsStartWithQ1(verQuestions);
+        setQuestions(normalized);
+        setSelectedQuestionId(normalized[0].id);
+        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+      } else {
+        setQuestions([]);
+      }
+
+      localStorage.setItem('rdip_survey_version', `${version.version_number} (${verStatus.toUpperCase()})`);
+      setDbSyncStatus('synced');
+      setDbStatusToast(`✓ Opened version ${version.version_number} [${verStatus.toUpperCase()}] from Supabase`);
+      setTimeout(() => setDbStatusToast(null), 3500);
+    } catch (err: any) {
+      setDbStatusToast(`Error opening version: ${err?.message || 'Database error'}`);
+      setDbSyncStatus('synced');
+    }
+  };
+
+  const handleVersionCreated = (result: {
+    version: DbQuestionnaireVersion;
+    questionnaire: DbQuestionnaire;
+    questions: Question[];
+  }) => {
+    const { version, questionnaire, questions: newQuestions } = result;
+    setActiveDbQuestionnaire(questionnaire);
+    setActiveVersionId(version.id);
+    setActiveVersionRecord(version);
+    setSurveyVersion(`${version.version_number} (DRAFT)`);
+
+    const normalized = ensureQuestionsStartWithQ1(newQuestions);
+    setQuestions(normalized);
+    if (normalized.length > 0) {
+      setSelectedQuestionId(normalized[0].id);
+    }
+    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+    localStorage.setItem('rdip_survey_version', `${version.version_number} (DRAFT)`);
+
+    // Update questionnaires state list
+    setProjectQuestionnaires((prev) =>
+      prev.map((q) => (q.id === questionnaire.id ? questionnaire : q))
+    );
+
+    setDbSyncStatus('synced');
+    setDbStatusToast(`✓ New draft version ${version.version_number} successfully registered in Supabase!`);
+    setTimeout(() => setDbStatusToast(null), 4000);
+  };
+
   const handleCreateQuestionnaire = async (params: CreateQuestionnaireParams) => {
-    const result = await createQuestionnaireInDb(params);
+    let result: CreateQuestionnaireResult;
+    try {
+      result = await createQuestionnaireInDb(params);
+    } catch (dbErr: any) {
+      return {
+        success: false,
+        error: `Supabase database error: ${dbErr?.message || 'Failed to insert questionnaire into public.questionnaires.'}`,
+      };
+    }
+
     if (result.error || !result.data) {
       return {
         success: false,
-        error: result.error || 'Failed to create questionnaire in Supabase.',
+        error: result.error || 'Failed to insert questionnaire into Supabase.',
       };
     }
 
     const { questionnaire, version } = result.data;
-    setProjectQuestionnaires((prev) => [questionnaire, ...prev]);
-    setActiveDbQuestionnaire(questionnaire);
-    setActiveVersionId(version.id);
-    setSurveyTitle(questionnaire.name);
-    setSurveyVersion(`${version.version_number} (DRAFT)`);
 
-    if (
-      version.schema_definition?.questions &&
-      Array.isArray(version.schema_definition.questions) &&
-      version.schema_definition.questions.length > 0
-    ) {
-      const normalized = ensureQuestionsStartWithQ1(version.schema_definition.questions);
-      setQuestions(normalized);
-      setSelectedQuestionId(normalized[0].id);
+    try {
+      // Obtain real database questionnaire record and update frontend state
+      setProjectQuestionnaires((prev) => {
+        const exists = prev.some((item) => item.id === questionnaire.id);
+        return exists
+          ? prev.map((item) => (item.id === questionnaire.id ? questionnaire : item))
+          : [questionnaire, ...prev];
+      });
+      setActiveDbQuestionnaire(questionnaire);
+      setActiveVersionId(version.id);
+      setActiveVersionRecord(version);
+      setSurveyTitle(questionnaire.name);
+      setSurveyVersion(`${version.version_number} (DRAFT)`);
+
+      if (
+        version.schema_definition?.questions &&
+        Array.isArray(version.schema_definition.questions) &&
+        version.schema_definition.questions.length > 0
+      ) {
+        const normalized = ensureQuestionsStartWithQ1(version.schema_definition.questions);
+        setQuestions(normalized);
+        setSelectedQuestionId(normalized[0].id);
+      }
+
+      // Synchronize parent research project if user created for another project
+      const targetProject = projects.find((p) => p.id === params.project_id);
+      if (targetProject && onSelectProject && selectedProject?.id !== targetProject.id) {
+        onSelectProject(targetProject);
+      }
+
+      setDbSyncStatus('synced');
+      setDbStatusToast(
+        `Questionnaire created successfully. "${questionnaire.name}" registered in Supabase (Draft ${version.version_number})`
+      );
+      setTimeout(() => setDbStatusToast(null), 5000);
+
+      return {
+        success: true,
+        questionnaire,
+        version,
+      };
+    } catch (uiErr: any) {
+      console.warn('[RDIP Studio] Questionnaire saved to DB but frontend UI state note:', uiErr);
+      // DB insert succeeded; distinguish DB success from UI state warning
+      return {
+        success: true,
+        questionnaire,
+        version,
+        warning: `Questionnaire created in Supabase (ID: ${questionnaire.id}), but UI update had a note: ${uiErr?.message}`,
+      };
     }
-
-    setDbSyncStatus('synced');
-    setDbStatusToast(
-      `Questionnaire "${questionnaire.name}" created in Supabase with draft version ${version.version_number}!`
-    );
-    setTimeout(() => setDbStatusToast(null), 4000);
-
-    return {
-      success: true,
-      questionnaire,
-      version,
-    };
   };
 
   useEffect(() => {
@@ -436,17 +565,28 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
   const handleUpdateOption = (optId: string, label: string) => {
     if (!selectedQuestion) return;
-    const updated = selectedQuestion.options.map((o) => (o.id === optId ? { ...o, label } : o));
+    const updated = (selectedQuestion.options || []).map((o) => (o.id === optId ? { ...o, label } : o));
     handleUpdateSelected({ options: updated });
   };
 
   const handleDeleteOption = (optId: string) => {
-    if (!selectedQuestion || selectedQuestion.options.length <= 1) return;
+    if (!selectedQuestion || !selectedQuestion.options || selectedQuestion.options.length <= 1) return;
     const updated = selectedQuestion.options.filter((o) => o.id !== optId);
     handleUpdateSelected({ options: updated });
   };
 
   const handleSave = async () => {
+    if (activeVersionRecord?.status === 'published') {
+      setDbStatusToast('🔒 Published version is locked (Read-Only). Click "+ New Version" to create an editable draft.');
+      setIsSavedToast(true);
+      setTimeout(() => {
+        setIsSavedToast(false);
+        setDbStatusToast(null);
+      }, 4000);
+      setIsSavingDb(false);
+      return;
+    }
+
     setIsSavingDb(true);
 
     // Save to local cache
@@ -490,12 +630,14 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
   };
 
   const handleCreateNewVersion = () => {
-    const nextVer = `v${(parseFloat(surveyVersion.replace('v', '')) + 0.1).toFixed(1)} (Active)`;
-    setSurveyVersion(nextVer);
-    localStorage.setItem('rdip_survey_version', nextVer);
-    localStorage.setItem('rdip_active_questionnaire', JSON.stringify(questions));
-    setIsSavedToast(true);
-    setTimeout(() => setIsSavedToast(false), 3000);
+    if (activeDbQuestionnaire) {
+      setIsCreateVersionModalOpen(true);
+    } else if (selectedProject?.id && UUID_REGEX.test(selectedProject.id)) {
+      setIsCreateModalOpen(true);
+    } else {
+      setDbStatusToast('Please select or create an authoritative Supabase questionnaire first.');
+      setTimeout(() => setDbStatusToast(null), 3000);
+    }
   };
 
   const isEnumerator = currentUser?.role === 'enumerator';
@@ -521,38 +663,38 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       )}
 
       {/* Primary Studio Header Bar */}
-      <div className="h-14 sm:h-16 border-b border-[#c4c6cf]/60 bg-white flex items-center justify-between px-3 sm:px-4 md:px-6 shrink-0 z-20 shadow-xs">
-        {/* Left: Survey Identity, Title, Project Context and Switcher */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-[#1a365d]/10 text-[#1a365d] flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-[20px]">quiz</span>
+      <div className="h-14 sm:h-16 border-b border-[#c4c6cf]/60 bg-white flex items-center justify-between px-2.5 sm:px-4 md:px-6 gap-2 shrink-0 z-20 shadow-xs">
+        {/* Left: Survey Identity, Title, Project Context, + New, and Version Badge */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1 overflow-hidden mr-1 sm:mr-2">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#1a365d]/10 text-[#1a365d] flex items-center justify-center shrink-0 shadow-xs">
+            <span className="material-symbols-outlined text-[18px] sm:text-[20px]">quiz</span>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-            {/* Project Context Pill */}
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 overflow-hidden">
+            {/* Project Context Pill (hidden on very small screens to preserve room) */}
             {selectedProject && (
               <div
-                className="hidden lg:flex items-center gap-1.5 bg-[#f1f3ff] border border-[#c4c6cf]/80 px-2.5 py-1 rounded-lg text-xs shrink-0 max-w-[200px]"
+                className="hidden md:flex items-center gap-1 bg-[#f1f3ff] border border-[#c4c6cf]/80 px-2 py-0.5 rounded-lg text-xs shrink-0 max-w-[130px] lg:max-w-[180px]"
                 title={`Parent Research Project: ${selectedProject.title}`}
               >
-                <span className="material-symbols-outlined text-[15px] text-[#1a365d]">folder</span>
-                <span className="font-bold text-[#002045] truncate">
-                  {selectedProject.projectCode || 'PROJ'}
+                <span className="material-symbols-outlined text-[14px] text-[#1a365d] shrink-0">folder</span>
+                <span className="font-bold text-[#002045] truncate text-[11px]">
+                  {selectedProject.code || (selectedProject as any).projectCode || 'PROJ'}
                 </span>
               </div>
             )}
 
-            {/* Supabase Questionnaire Switcher / Input */}
-            {projectQuestionnaires.length > 0 ? (
-              <div className="flex items-center gap-1 shrink-0">
+            {/* Supabase Questionnaire Switcher or Title Input */}
+            {projectQuestionnaires.length > 1 ? (
+              <div className="flex items-center gap-1 min-w-0 flex-1 max-w-[180px] sm:max-w-[240px]">
                 <select
                   id="studio-questionnaire-selector"
                   value={activeDbQuestionnaire?.id || ''}
                   onChange={(e) => handleSelectDbQuestionnaire(e.target.value)}
-                  className="text-xs font-bold text-[#002045] bg-[#f9f9ff] border border-[#c4c6cf] hover:border-[#1a365d] rounded-lg px-2 py-1 outline-none max-w-[200px] truncate cursor-pointer"
+                  className="w-full text-xs font-bold text-[#002045] bg-[#f9f9ff] border border-[#c4c6cf] hover:border-[#1a365d] rounded-lg px-2 py-1 outline-none truncate cursor-pointer"
                   title="Switch between Supabase questionnaires in this project"
                 >
-                  {projectQuestionnaires.map((q) => (
+                  {(projectQuestionnaires || []).map((q) => (
                     <option key={q.id} value={q.id}>
                       {q.name} ({q.current_version?.version_number || 'v1.0'})
                     </option>
@@ -566,108 +708,226 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                 onChange={(e) => setSurveyTitle(e.target.value)}
                 disabled={isEnumerator}
                 title="Click to edit questionnaire title"
-                className="text-xs sm:text-sm md:text-base font-bold text-[#002045] bg-transparent border border-transparent hover:border-[#c4c6cf] focus:border-[#1a365d] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1a365d] rounded px-1.5 py-0.5 min-w-[110px] max-w-[150px] sm:max-w-[200px] md:max-w-xs truncate transition-all"
+                placeholder="Questionnaire Title..."
+                className="text-xs sm:text-sm font-bold text-[#002045] bg-transparent border border-transparent hover:border-[#c4c6cf] focus:border-[#1a365d] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1a365d] rounded px-1.5 py-0.5 min-w-[80px] flex-1 max-w-[160px] sm:max-w-[220px] md:max-w-xs truncate transition-all"
               />
             )}
 
-            {/* "+ New Questionnaire" Action Button */}
+            {/* "+ New Questionnaire" Compact Action Button (logically situated with the questionnaire selector) */}
             {!isEnumerator && (
               <button
                 id="studio-create-questionnaire-btn"
                 type="button"
                 onClick={() => setIsCreateModalOpen(true)}
-                className="px-2.5 py-1 bg-[#006a68]/10 text-[#006a68] hover:bg-[#006a68]/20 border border-[#006a68]/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                className="p-1 sm:px-2 sm:py-1 bg-[#006a68]/10 text-[#006a68] hover:bg-[#006a68]/20 border border-[#006a68]/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap cursor-pointer"
                 title="Create a new questionnaire in Supabase PostgreSQL"
               >
                 <span className="material-symbols-outlined text-[15px]">add_circle</span>
-                <span className="hidden sm:inline">+ New Questionnaire</span>
-                <span className="sm:hidden">+ New</span>
+                <span className="hidden sm:inline">+ New</span>
               </button>
             )}
 
-            {/* Version Badge */}
+            {/* Version Badge & History Popover Trigger */}
             <div className="flex items-center gap-1 shrink-0">
-              <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded bg-[#dde2f3] text-[#002045] border border-[#adc7f7]">
-                {surveyVersion}
-              </span>
-            </div>
-          </div>
+              <button
+                id="studio-version-history-btn"
+                type="button"
+                onClick={() => {
+                  if (activeDbQuestionnaire) {
+                    setIsVersionHistoryOpen(true);
+                  }
+                }}
+                disabled={!activeDbQuestionnaire}
+                className={`flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-1.5 sm:px-2 py-0.5 rounded whitespace-nowrap transition-colors border ${
+                  activeVersionRecord?.status === 'published'
+                    ? 'bg-emerald-50 text-emerald-950 border-emerald-300 hover:bg-emerald-100'
+                    : 'bg-[#dde2f3] text-[#002045] border-[#adc7f7] hover:bg-[#c9d5f0]'
+                } ${activeDbQuestionnaire ? 'cursor-pointer' : 'cursor-default'}`}
+                title={
+                  activeDbQuestionnaire
+                    ? 'Click to view Version History & Switch Versions in Supabase'
+                    : 'Survey Version'
+                }
+              >
+                <span className="material-symbols-outlined text-[13px]">
+                  {activeVersionRecord?.status === 'published' ? 'lock' : 'history'}
+                </span>
+                <span>{surveyVersion}</span>
+                {activeDbQuestionnaire && (
+                  <span className="material-symbols-outlined text-[13px] opacity-70">expand_more</span>
+                )}
+              </button>
 
-          {/* Database Synchronization Status Badge */}
-          {dbSyncStatus === 'synced' ? (
-            <div className="hidden xl:flex items-center gap-1 text-[11px] text-[#006a68] font-medium bg-[#91f0ed]/25 border border-[#006a68]/30 px-2 py-0.5 rounded-full shrink-0">
-              <span className="material-symbols-outlined text-[13px]">cloud_done</span>
-              <span>Supabase DB (Draft)</span>
+              {/* "+ New Version" Header Quick Action Button */}
+              {!isEnumerator && activeDbQuestionnaire && (
+                <button
+                  id="studio-create-version-btn"
+                  type="button"
+                  onClick={() => setIsCreateVersionModalOpen(true)}
+                  className="hidden md:flex items-center gap-1 text-[11px] font-semibold text-[#1a365d] hover:text-[#002045] hover:bg-[#1a365d]/10 px-2 py-0.5 rounded border border-[#1a365d]/30 transition-colors cursor-pointer"
+                  title="Branch a new version in Supabase"
+                >
+                  <span className="material-symbols-outlined text-[14px]">fork_right</span>
+                  <span>+ New Version</span>
+                </button>
+              )}
             </div>
-          ) : (
-            <div className="hidden xl:flex items-center gap-1 text-[11px] text-amber-800 font-medium bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-full shrink-0">
-              <span className="material-symbols-outlined text-[13px]">cloud_off</span>
-              <span>Local Draft</span>
-            </div>
-          )}
+
+            {/* Database Synchronization Status Badge (desktop only) */}
+            {dbSyncStatus === 'synced' ? (
+              <div className="hidden xl:flex items-center gap-1 text-[11px] text-[#006a68] font-medium bg-[#91f0ed]/25 border border-[#006a68]/30 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
+                <span className="material-symbols-outlined text-[13px]">cloud_done</span>
+                <span>Supabase Synced</span>
+              </div>
+            ) : (
+              <div className="hidden xl:flex items-center gap-1 text-[11px] text-amber-800 font-medium bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
+                <span className="material-symbols-outlined text-[13px]">cloud_off</span>
+                <span>Local Draft</span>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Right: Primary Quick Action Controls */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {/* Right: Primary Quick Action Controls (Share, Preview, Save Draft) */}
+        <div className="flex items-center gap-1 sm:gap-1.5 md:gap-2 shrink-0">
           <button
             onClick={() => setIsShareModalOpen(true)}
-            className="px-2.5 sm:px-3 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap cursor-pointer"
+            className="px-2 sm:px-2.5 md:px-3 py-1.5 bg-[#006a68]/10 text-[#006a68] border border-[#006a68]/30 hover:bg-[#006a68]/20 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap cursor-pointer"
             title="Generate field enumerator and web survey links"
           >
-            <span className="material-symbols-outlined text-[17px]">share</span>
-            <span className="hidden md:inline">Share</span>
+            <span className="material-symbols-outlined text-[16px]">share</span>
+            <span className="hidden sm:inline">Share</span>
           </button>
 
           <button
             onClick={() => setShowSurveyPreview(true)}
-            className="px-2.5 sm:px-3 py-1.5 text-[#002045] text-xs font-semibold hover:bg-[#f1f3ff] rounded-lg transition-colors flex items-center gap-1.5 border border-[#c4c6cf] shrink-0 whitespace-nowrap cursor-pointer"
+            className="px-2 sm:px-2.5 md:px-3 py-1.5 text-[#002045] text-xs font-semibold hover:bg-[#f1f3ff] rounded-lg transition-colors flex items-center gap-1 border border-[#c4c6cf] shrink-0 whitespace-nowrap cursor-pointer"
             title="Preview survey as respondent"
           >
-            <span className="material-symbols-outlined text-[17px]">visibility</span>
+            <span className="material-symbols-outlined text-[16px]">visibility</span>
             <span className="hidden sm:inline">Preview</span>
           </button>
 
           <button
             id="studio-save-draft-btn"
             onClick={handleSave}
-            disabled={isEnumerator || isSavingDb}
-            className="px-3 sm:px-4 py-1.5 bg-[#1a365d] text-white text-xs font-semibold hover:bg-[#002045] disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
-            title={activeDbQuestionnaire ? 'Save draft changes to Supabase' : 'Save draft locally / to project'}
+            disabled={isEnumerator || isSavingDb || activeVersionRecord?.status === 'published'}
+            className={`px-2.5 sm:px-3.5 md:px-4 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 sm:gap-1.5 shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer ${
+              activeVersionRecord?.status === 'published'
+                ? 'bg-emerald-900/70 text-white opacity-85 cursor-not-allowed'
+                : 'bg-[#1a365d] text-white hover:bg-[#002045] disabled:opacity-50'
+            }`}
+            title={
+              activeVersionRecord?.status === 'published'
+                ? 'Published versions are locked and cannot be modified. Click "+ New Version" to create a new draft.'
+                : activeDbQuestionnaire
+                ? 'Save draft changes to Supabase'
+                : 'Save draft locally / to project'
+            }
           >
-            <span className={`material-symbols-outlined text-[17px] ${isSavingDb ? 'animate-spin' : ''}`}>
-              {isSavingDb ? 'refresh' : 'save'}
+            <span className={`material-symbols-outlined text-[16px] ${isSavingDb ? 'animate-spin' : ''}`}>
+              {isSavingDb ? 'refresh' : activeVersionRecord?.status === 'published' ? 'lock' : 'save'}
             </span>
-            <span>{isSavingDb ? 'Saving to DB...' : 'Save Draft'}</span>
+            <span className="hidden sm:inline">
+              {isSavingDb
+                ? 'Saving...'
+                : activeVersionRecord?.status === 'published'
+                ? 'Published (Locked)'
+                : 'Save Draft'}
+            </span>
+            <span className="sm:hidden">
+              {isSavingDb ? '...' : activeVersionRecord?.status === 'published' ? 'Locked' : 'Save'}
+            </span>
           </button>
         </div>
       </div>
 
+      {/* Published Version Protection Banner */}
+      {activeVersionRecord?.status === 'published' && (
+        <div
+          id="published-version-readonly-banner"
+          className="bg-emerald-50 border-b border-emerald-300 px-3 sm:px-5 py-2 flex items-center justify-between gap-3 text-emerald-950 z-10 shrink-0 shadow-2xs"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-6 h-6 rounded-md bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-800 shrink-0">
+              <span className="material-symbols-outlined text-[15px]">lock</span>
+            </div>
+            <div className="text-xs min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-emerald-950">
+                  Version {activeVersionRecord.version_number} is Published
+                </span>
+                <span className="text-[10px] bg-emerald-200 text-emerald-900 px-1.5 py-0.2 rounded font-mono uppercase font-bold">
+                  Read-Only
+                </span>
+              </div>
+              <p className="text-[11px] text-emerald-800 truncate sm:whitespace-normal">
+                Published versions cannot be modified to protect data integrity. Create a new draft version to make changes.
+              </p>
+            </div>
+          </div>
+
+          {!isEnumerator && (
+            <button
+              id="published-create-draft-btn"
+              type="button"
+              onClick={() => setIsCreateVersionModalOpen(true)}
+              className="px-3 py-1 bg-[#006a68] hover:bg-[#00514f] text-white text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors cursor-pointer shadow-xs shrink-0"
+              title="Branch an editable draft from this published version"
+            >
+              <span className="material-symbols-outlined text-[15px]">fork_right</span>
+              <span>+ New Draft Version</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Studio Sub-Navigation Ribbon (Dedicated Section Views & Presets) */}
-      <div className="h-11 sm:h-12 border-b border-[#c4c6cf]/60 bg-[#f9f9ff] px-3 sm:px-4 md:px-6 flex items-center justify-between gap-2 sm:gap-4 shrink-0 z-10 select-none overflow-x-auto no-scrollbar">
-        {/* Left: View Tabs */}
-        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+      <div className="h-11 sm:h-12 border-b border-[#c4c6cf]/60 bg-[#f9f9ff] px-2.5 sm:px-4 md:px-6 flex items-center justify-between gap-2 shrink-0 z-10 select-none overflow-hidden">
+        {/* Left: View Tabs (Horizontally scrollable on small viewports without overlapping right controls) */}
+        <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-1 flex-1 min-w-0 mr-1 sm:mr-2">
           <button
             onClick={() => setMobileActiveTab('canvas')}
-            className={`px-2.5 sm:px-3 py-1 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
+            className={`px-2 sm:px-2.5 md:px-3 py-1 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
               mobileActiveTab === 'canvas'
                 ? 'bg-white text-[#002045] shadow-xs border border-[#c4c6cf]/60'
                 : 'text-[#43474e] hover:bg-[#f1f3ff]'
             }`}
           >
             <span className="material-symbols-outlined text-[16px] text-[#1a365d]">format_list_bulleted</span>
-            <span>Questions</span>
+            <span className="hidden sm:inline">Questions Canvas</span>
+            <span className="sm:hidden">Questions</span>
             <span className="bg-[#dde2f3] text-[#002045] text-[10px] font-bold px-1.5 py-0.2 rounded-full font-mono">
               {questions.length}
             </span>
           </button>
 
           <button
+            onClick={() => {
+              setIsQuestionBankOpen(true);
+              setLeftSidebarTab('outline');
+              setMobileActiveTab('outline');
+            }}
+            className={`px-2 sm:px-2.5 md:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
+              isQuestionBankOpen && leftSidebarTab === 'outline' && mobileActiveTab !== 'bank'
+                ? 'bg-white text-[#002045] shadow-xs border border-[#c4c6cf]/60 font-bold'
+                : 'text-[#43474e] hover:bg-[#f1f3ff]'
+            }`}
+            title="View survey questions outline & jump directly to any question"
+          >
+            <span className="material-symbols-outlined text-[16px] text-[#1a365d]">list_alt</span>
+            <span className="hidden sm:inline">Survey Outline</span>
+            <span className="sm:hidden">Outline</span>
+          </button>
+
+          <button
             onClick={() => setShowLogicMatrixModal(true)}
-            className="px-2.5 sm:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap text-[#6b21a8] bg-[#6b21a8]/10 hover:bg-[#6b21a8]/20 border border-[#6b21a8]/30 cursor-pointer"
+            className="px-2 sm:px-2.5 md:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap text-[#6b21a8] bg-[#6b21a8]/10 hover:bg-[#6b21a8]/20 border border-[#6b21a8]/30 cursor-pointer"
             title="Open complete branching logic flowchart matrix"
           >
             <span className="material-symbols-outlined text-[16px]">alt_route</span>
-            <span>Logic Matrix</span>
+            <span className="hidden sm:inline">Logic Matrix</span>
+            <span className="sm:hidden">Logic</span>
             {questionsWithLogicCount > 0 && (
               <span className="bg-[#6b21a8] text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full font-mono">
                 {questionsWithLogicCount}
@@ -677,7 +937,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
           <button
             onClick={() => setShowLogicImportExportModal(true)}
-            className="px-2.5 sm:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap text-[#006a68] bg-[#006a68]/10 hover:bg-[#006a68]/20 border border-[#006a68]/30 cursor-pointer"
+            className="px-2 sm:px-2.5 md:px-3 py-1 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap text-[#006a68] bg-[#006a68]/10 hover:bg-[#006a68]/20 border border-[#006a68]/30 cursor-pointer"
             title="Import or export questionnaire logic definition as JSON"
           >
             <span className="material-symbols-outlined text-[16px]">sync_alt</span>
@@ -687,9 +947,9 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         </div>
 
         {/* Right: Layout Preset & Responsive Panel Switchers */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {/* Appearance Style Selector */}
-          <div className="flex items-center gap-0.5 bg-white p-0.5 rounded-lg border border-[#c4c6cf]/60 text-xs shadow-xs shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 pl-1.5 sm:pl-2 border-l border-[#c4c6cf]/40 bg-[#f9f9ff]">
+          {/* Appearance Style Selector (hidden on mobile to prevent any crowding) */}
+          <div className="hidden md:flex items-center gap-0.5 bg-white p-0.5 rounded-lg border border-[#c4c6cf]/60 text-xs shadow-xs shrink-0">
             <button
               onClick={() => setSurveyStyle('academic')}
               className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
@@ -723,42 +983,58 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           <div className="hidden lg:flex items-center gap-1 border-l border-[#c4c6cf]/60 pl-2 shrink-0">
             <button
               onClick={() => setIsQuestionBankOpen(!isQuestionBankOpen)}
-              className={`p-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+              className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
                 isQuestionBankOpen
                   ? 'bg-[#dde2f3] text-[#002045]'
                   : 'text-[#74777f] hover:bg-[#f1f3ff]'
               }`}
-              title={isQuestionBankOpen ? 'Collapse Question Bank' : 'Expand Question Bank'}
+              title={isQuestionBankOpen ? 'Collapse Left Sidebar' : 'Expand Left Sidebar'}
             >
-              <span className="material-symbols-outlined text-[18px]">
+              <span className="material-symbols-outlined text-[17px]">
                 {isQuestionBankOpen ? 'left_panel_close' : 'left_panel_open'}
               </span>
+              <span className="text-[11px] hidden xl:inline">Sidebar</span>
             </button>
 
             <button
               onClick={() => setIsInspectorOpen(!isInspectorOpen)}
-              className={`p-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+              className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
                 isInspectorOpen
                   ? 'bg-[#dde2f3] text-[#002045]'
                   : 'text-[#74777f] hover:bg-[#f1f3ff]'
               }`}
               title={isInspectorOpen ? 'Collapse Inspector' : 'Expand Inspector'}
             >
-              <span className="material-symbols-outlined text-[18px]">
+              <span className="material-symbols-outlined text-[17px]">
                 {isInspectorOpen ? 'right_panel_close' : 'right_panel_open'}
               </span>
+              <span className="text-[11px] hidden xl:inline">Inspector</span>
             </button>
           </div>
 
           {/* Mobile View Switcher */}
           <div className="flex lg:hidden items-center gap-0.5 bg-white p-0.5 rounded-lg border border-[#c4c6cf]/60 text-[11px] font-semibold shadow-xs shrink-0">
             <button
-              onClick={() => setMobileActiveTab('bank')}
+              onClick={() => {
+                setLeftSidebarTab('bank');
+                setMobileActiveTab('bank');
+              }}
               className={`px-2 py-0.5 rounded transition-colors whitespace-nowrap ${
                 mobileActiveTab === 'bank' ? 'bg-[#1a365d] text-white' : 'text-[#43474e]'
               }`}
             >
               + Add
+            </button>
+            <button
+              onClick={() => {
+                setLeftSidebarTab('outline');
+                setMobileActiveTab('outline');
+              }}
+              className={`px-2 py-0.5 rounded transition-colors whitespace-nowrap ${
+                mobileActiveTab === 'outline' ? 'bg-[#1a365d] text-white' : 'text-[#43474e]'
+              }`}
+            >
+              Outline
             </button>
             <button
               onClick={() => setMobileActiveTab('canvas')}
@@ -782,52 +1058,201 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
       {/* Builder Workspace: Multi-Column Responsive Layout */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Left Panel: Question Bank */}
+        {/* Left Panel: Question Bank & Survey Outline Navigator */}
         <div
           className={`${
-            mobileActiveTab === 'bank'
+            mobileActiveTab === 'bank' || mobileActiveTab === 'outline'
               ? 'flex w-full absolute inset-0 bg-white z-20'
               : isQuestionBankOpen
-              ? 'hidden lg:flex w-64'
+              ? 'hidden lg:flex w-72'
               : 'hidden'
-          } border-r border-[#c4c6cf]/60 bg-white flex-col shrink-0 overflow-y-auto transition-all duration-200`}
+          } border-r border-[#c4c6cf]/60 bg-white flex-col shrink-0 overflow-hidden transition-all duration-200`}
         >
-          <div className="p-3.5 border-b border-[#c4c6cf]/40 flex items-center justify-between">
-            <h2 className="text-xs font-bold text-[#002045] uppercase tracking-wider flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[16px] text-[#1a365d]">add_box</span>
-              Question Bank
-            </h2>
-            {/* Mobile Done button */}
+          {/* Left Panel Header with Segmented Switcher & Mobile Back Button */}
+          <div className="p-2.5 border-b border-[#c4c6cf]/50 flex items-center justify-between bg-[#f9f9ff] shrink-0">
+            <div className="flex items-center gap-1 bg-[#dde2f3]/60 p-0.5 rounded-lg border border-[#c4c6cf]/60">
+              <button
+                type="button"
+                onClick={() => {
+                  setLeftSidebarTab('bank');
+                  if (mobileActiveTab === 'outline') setMobileActiveTab('bank');
+                }}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer ${
+                  leftSidebarTab === 'bank' && mobileActiveTab !== 'outline'
+                    ? 'bg-white text-[#002045] shadow-xs'
+                    : 'text-[#43474e] hover:text-[#002045]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">add_box</span>
+                <span>Question Bank</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLeftSidebarTab('outline');
+                  if (mobileActiveTab === 'bank') setMobileActiveTab('outline');
+                }}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer ${
+                  leftSidebarTab === 'outline' || mobileActiveTab === 'outline'
+                    ? 'bg-white text-[#002045] shadow-xs'
+                    : 'text-[#43474e] hover:text-[#002045]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">list_alt</span>
+                <span>Outline</span>
+                <span className="text-[10px] font-mono bg-[#dde2f3] px-1 rounded-full text-[#002045]">
+                  {questions.length}
+                </span>
+              </button>
+            </div>
+
+            {/* Mobile Return to Canvas button */}
             <button
               onClick={() => setMobileActiveTab('canvas')}
-              className="lg:hidden text-xs text-[#1a365d] font-semibold hover:underline flex items-center gap-0.5"
+              className="lg:hidden text-xs text-[#1a365d] font-semibold hover:underline flex items-center gap-0.5 px-2 py-1 rounded bg-[#1a365d]/10 cursor-pointer"
             >
-              <span>Back to Canvas</span>
-              <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+              <span>Canvas</span>
+              <span className="material-symbols-outlined text-[15px]">arrow_forward</span>
             </button>
           </div>
-          <div className="p-4 flex flex-col gap-2 overflow-y-auto">
-            {/* Question Bank Search */}
-            <div className="relative mb-1">
-              <span className="material-symbols-outlined absolute left-2.5 top-2 text-[#74777f] text-[15px]">
-                search
-              </span>
-              <input
-                type="text"
-                value={bankSearch}
-                onChange={(e) => setBankSearch(e.target.value)}
-                placeholder="Search types (e.g. location, GPS)..."
-                className="w-full pl-8 pr-7 py-1.5 text-xs bg-[#f9f9ff] border border-[#c4c6cf]/80 rounded-lg focus:border-[#1a365d] focus:bg-white outline-none"
-              />
-              {bankSearch && (
+
+          {/* Left Panel Content: Toggle between Question Outline & Question Bank */}
+          {(leftSidebarTab === 'outline' || mobileActiveTab === 'outline') && mobileActiveTab !== 'bank' ? (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Outline Search */}
+              <div className="p-3 border-b border-[#c4c6cf]/40 bg-white shrink-0">
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-2 text-[#74777f] text-[15px]">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={outlineSearch}
+                    onChange={(e) => setOutlineSearch(e.target.value)}
+                    placeholder="Filter questions..."
+                    className="w-full pl-8 pr-7 py-1.5 text-xs bg-[#f9f9ff] border border-[#c4c6cf]/80 rounded-lg focus:border-[#1a365d] focus:bg-white outline-none"
+                  />
+                  {outlineSearch && (
+                    <button
+                      onClick={() => setOutlineSearch('')}
+                      className="absolute right-2 top-2 text-[#74777f] hover:text-[#002045]"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Outline Questions List */}
+              <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                {(questions || [])
+                  .map((q, idx) => ({ q, originalIndex: idx }))
+                  .filter(({ q }) =>
+                    !outlineSearch ||
+                    q.title.toLowerCase().includes(outlineSearch.toLowerCase()) ||
+                    q.variableName.toLowerCase().includes(outlineSearch.toLowerCase()) ||
+                    q.number.toLowerCase().includes(outlineSearch.toLowerCase()) ||
+                    q.type.toLowerCase().includes(outlineSearch.toLowerCase())
+                  )
+                  .map(({ q, originalIndex }) => {
+                    const isSelected = q.id === selectedQuestionId;
+                    const hasLogic = q.logicRule?.enabled && (q.logicRule.branches || []).length > 0;
+                    return (
+                      <div
+                        key={q.id}
+                        onClick={() => {
+                          setSelectedQuestionId(q.id);
+                          setMobileActiveTab('canvas');
+                          document.getElementById(`question-card-${q.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }}
+                        className={`group p-2.5 rounded-xl text-xs transition-all flex items-start gap-2 border cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#1a365d]/10 border-[#1a365d] text-[#002045] font-semibold shadow-xs ring-1 ring-[#1a365d]/25'
+                            : 'bg-white border-[#c4c6cf]/50 hover:border-[#1a365d]/50 hover:bg-[#f1f3ff]/60 text-[#43474e]'
+                        }`}
+                      >
+                        <span className="font-mono text-[10px] font-bold bg-[#dde2f3] text-[#002045] px-1.5 py-0.5 rounded shrink-0 mt-0.5">
+                          {q.number || `Q${originalIndex + 1}`}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-semibold leading-snug">{q.title || 'Untitled Question'}</p>
+                          <div className="flex items-center gap-1.5 text-[10px] text-[#74777f] font-mono mt-1 flex-wrap">
+                            <span className="text-[#002045]">{q.variableName}</span>
+                            <span>•</span>
+                            <span className="capitalize">{q.type}</span>
+                            {hasLogic && (
+                              <span className="text-[#6b21a8] font-bold bg-[#6b21a8]/10 px-1 rounded flex items-center gap-0.5" title="Branching logic active">
+                                <span className="material-symbols-outlined text-[11px]">alt_route</span>
+                                Logic
+                              </span>
+                            )}
+                            {q.required && (
+                              <span className="text-[#ba1a1a] font-bold" title="Required field">*Req</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Reorder Buttons */}
+                        <div className="flex flex-col gap-0.5 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            disabled={originalIndex === 0}
+                            onClick={() => handleMoveQuestion(originalIndex, 'up')}
+                            className="p-0.5 hover:bg-[#dde2f3] rounded text-[#74777f] hover:text-[#002045] disabled:opacity-20 cursor-pointer"
+                            title="Move Up"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">arrow_drop_up</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={originalIndex === questions.length - 1}
+                            onClick={() => handleMoveQuestion(originalIndex, 'down')}
+                            className="p-0.5 hover:bg-[#dde2f3] rounded text-[#74777f] hover:text-[#002045] disabled:opacity-20 cursor-pointer"
+                            title="Move Down"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">arrow_drop_down</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {/* Append Question */}
                 <button
-                  onClick={() => setBankSearch('')}
-                  className="absolute right-2 top-2 text-[#74777f] hover:text-[#002045]"
+                  type="button"
+                  onClick={() => handleAddQuestion('multiple-choice')}
+                  className="w-full mt-2 p-2.5 border border-dashed border-[#1a365d]/50 hover:border-[#1a365d] bg-[#f1f3ff]/50 hover:bg-[#f1f3ff] rounded-xl text-xs font-semibold text-[#1a365d] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
+                  <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                  <span>+ Append New Question</span>
                 </button>
-              )}
+              </div>
             </div>
+          ) : (
+            /* Question Bank Content */
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="p-4 flex flex-col gap-2 overflow-y-auto flex-1">
+                {/* Question Bank Search */}
+                <div className="relative mb-1">
+                  <span className="material-symbols-outlined absolute left-2.5 top-2 text-[#74777f] text-[15px]">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={bankSearch}
+                    onChange={(e) => setBankSearch(e.target.value)}
+                    placeholder="Search types (e.g. location, GPS)..."
+                    className="w-full pl-8 pr-7 py-1.5 text-xs bg-[#f9f9ff] border border-[#c4c6cf]/80 rounded-lg focus:border-[#1a365d] focus:bg-white outline-none"
+                  />
+                  {bankSearch && (
+                    <button
+                      onClick={() => setBankSearch('')}
+                      className="absolute right-2 top-2 text-[#74777f] hover:text-[#002045]"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  )}
+                </div>
 
             {/* Geospatial & Coordinates Category */}
             {(!bankSearch ||
@@ -1086,6 +1511,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             </div>
           </div>
         </div>
+      )}
+    </div>
 
         {/* Center Panel: Canvas */}
         <div
@@ -1113,13 +1540,14 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             </div>
 
             {/* Questions List */}
-            {questions.map((question, index) => {
+            {(questions || []).map((question, index) => {
               const isActive = question.id === selectedQuestionId;
-              const hasActiveLogic = question.logicRule?.enabled && question.logicRule.branches.length > 0;
+              const hasActiveLogic = question.logicRule?.enabled && (question.logicRule.branches || []).length > 0;
 
               return (
                 <div
                   key={question.id}
+                  id={`question-card-${question.id}`}
                   onClick={() => setSelectedQuestionId(question.id)}
                   className={`bg-white p-6 rounded-xl card-shadow transition-all relative cursor-pointer border ${
                     isActive
@@ -1221,7 +1649,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                     {question.type === 'dropdown' && (
                       <select disabled className="w-64 border border-[#c4c6cf] bg-[#f9f9ff] text-xs rounded-lg h-9 px-2 text-[#74777f]">
                         <option>Select an option...</option>
-                        {question.options.map((opt) => (
+                        {(question.options || []).map((opt) => (
                           <option key={opt.id}>{opt.label}</option>
                         ))}
                       </select>
@@ -1229,7 +1657,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
                     {(question.type === 'multiple-choice' || question.type === 'checkboxes') && (
                       <div className="flex flex-col gap-2">
-                        {question.options.map((opt) => (
+                        {(question.options || []).map((opt) => (
                           <div key={opt.id} className="flex items-center gap-2.5 text-xs text-[#161c27]">
                             <span className="material-symbols-outlined text-[#74777f] text-[18px]">
                               {question.type === 'checkboxes' ? 'check_box_outline_blank' : 'radio_button_unchecked'}
@@ -1245,7 +1673,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
 
                     {question.type === 'likert' && (
                       <div className="flex flex-wrap items-center gap-2 pt-1">
-                        {question.options.map((opt) => (
+                        {(question.options || []).map((opt) => (
                           <div
                             key={opt.id}
                             className="px-3 py-1.5 rounded-lg border border-[#c4c6cf] bg-[#f9f9ff] text-xs text-[#002045] font-medium"
@@ -1629,7 +2057,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                     </div>
 
                     <div className="space-y-2">
-                      {selectedQuestion.options.map((opt) => (
+                      {(selectedQuestion.options || []).map((opt) => (
                         <div key={opt.id} className="flex items-center gap-1.5 group">
                           <span className="material-symbols-outlined text-[14px] text-[#74777f] cursor-grab">
                             drag_indicator
@@ -2015,8 +2443,8 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#c4c6cf]/40">
-                    {questions.map((q) => {
-                      const hasLogic = q.logicRule?.enabled && q.logicRule.branches.length > 0;
+                    {(questions || []).map((q) => {
+                      const hasLogic = q.logicRule?.enabled && (q.logicRule.branches || []).length > 0;
                       return (
                         <tr
                           key={q.id}
@@ -2046,12 +2474,12 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
                           <td className="p-3 align-top">
                             {hasLogic ? (
                               <div className="font-mono text-[11px] text-[#4c1d95] bg-[#faf5ff] p-2 rounded border border-[#e9d5ff] space-y-1">
-                                {q.logicRule?.branches.map((b, bIdx) => (
+                                {q.logicRule?.branches?.map((b, bIdx) => (
                                   <div key={b.id} className="flex items-start gap-1">
                                     <span className="font-bold text-[#7e22ce] shrink-0">
                                       {b.branchType}
                                     </span>
-                                    {b.clauses.length > 0 ? (
+                                    {b.clauses && b.clauses.length > 0 ? (
                                       <span className="text-[#3b0764]">
                                         ({b.clauses.map(c => `${c.sourceVariable} ${c.operator} ${c.value ?? ''}`).join(` ${b.matchType} `)})
                                       </span>
@@ -2150,21 +2578,51 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
             institution: 'Research Lab',
           }
         }
+        initialError={creationErrorAlert}
         onCreateQuestionnaire={handleCreateQuestionnaire}
       />
+
+      {/* Questionnaire Version History Modal (Phase 5) */}
+      {isVersionHistoryOpen && activeDbQuestionnaire && (
+        <VersionHistoryModal
+          questionnaire={activeDbQuestionnaire}
+          activeVersionId={activeVersionId}
+          onClose={() => setIsVersionHistoryOpen(false)}
+          onSelectVersion={handleSelectVersion}
+          onCreateNewVersionClick={() => setIsCreateVersionModalOpen(true)}
+          isEnumerator={isEnumerator}
+        />
+      )}
+
+      {/* Create New Draft Version Modal (Phase 5) */}
+      {isCreateVersionModalOpen && activeDbQuestionnaire && (
+        <CreateVersionModal
+          questionnaire={activeDbQuestionnaire}
+          sourceVersion={activeVersionRecord}
+          currentQuestions={questions}
+          onClose={() => setIsCreateVersionModalOpen(false)}
+          onVersionCreated={handleVersionCreated}
+          isEnumerator={isEnumerator}
+        />
+      )}
 
       {/* Database Operation Notification Toast */}
       {dbStatusToast && (
         <div
           id="rdip-db-status-toast"
-          className="fixed bottom-6 left-6 z-[140] bg-[#002045] text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-[#91f0ed]/30 animate-in slide-in-from-bottom-5"
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-6 z-[150] bg-[#002045] text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-[#91f0ed]/40 animate-in slide-in-from-bottom-5 max-w-lg"
         >
-          <span className="material-symbols-outlined text-[#91f0ed] text-[20px]">cloud_sync</span>
-          <span className="text-xs font-semibold">{dbStatusToast}</span>
+          <span className="material-symbols-outlined text-[#34d399] text-[22px] shrink-0">
+            check_circle
+          </span>
+          <span className="text-xs font-semibold leading-relaxed">{dbStatusToast}</span>
           <button
             type="button"
             onClick={() => setDbStatusToast(null)}
-            className="text-white/60 hover:text-white ml-2 cursor-pointer"
+            className="text-white/60 hover:text-white ml-2 cursor-pointer shrink-0"
+            title="Dismiss notification"
           >
             <span className="material-symbols-outlined text-[16px]">close</span>
           </button>

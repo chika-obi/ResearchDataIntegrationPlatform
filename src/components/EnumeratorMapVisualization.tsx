@@ -547,9 +547,9 @@ export const EnumeratorMapVisualization: React.FC<EnumeratorMapVisualizationProp
             {/* Breadcrumb Transit Trail Historical Paths */}
             {showBreadcrumbs && (
               <g>
-                {filteredEnumerators.map((e) => {
+                {(filteredEnumerators || []).map((e) => {
                   if (!e.locationHistory || e.locationHistory.length < 2) return null;
-                  const points = e.locationHistory.map((pt) => {
+                  const points = (e.locationHistory || []).map((pt) => {
                     const p = projectGeoToSvg(pt.latitude, pt.longitude);
                     return `${p.x},${p.y}`;
                   }).join(' ');
@@ -566,7 +566,7 @@ export const EnumeratorMapVisualization: React.FC<EnumeratorMapVisualizationProp
                         strokeOpacity={isSelected ? 0.9 : 0.5}
                       />
                       {/* Trail Waypoints */}
-                      {e.locationHistory.map((wpt, idx) => {
+                      {(e.locationHistory || []).map((wpt, idx) => {
                         const wpPos = projectGeoToSvg(wpt.latitude, wpt.longitude);
                         return (
                           <circle
@@ -586,7 +586,7 @@ export const EnumeratorMapVisualization: React.FC<EnumeratorMapVisualizationProp
             )}
 
             {/* Active Enumerator Markers & Pins */}
-            {filteredEnumerators.map((e) => {
+            {(filteredEnumerators || []).map((e) => {
               if (!e.coordinates) return null;
               const pos = projectGeoToSvg(e.coordinates.latitude, e.coordinates.longitude);
               const isSelected = selectedEnumerator?.id === e.id;
@@ -666,7 +666,7 @@ export const EnumeratorMapVisualization: React.FC<EnumeratorMapVisualizationProp
                     fill={isSelected ? 'white' : '#002045'}
                     fontFamily="monospace"
                   >
-                    {e.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+                    {(e.name || 'EN').split(' ').filter(Boolean).map((n) => n[0]).join('').slice(0, 2)}
                   </text>
 
                   {/* Top Badge: Unsynced offline buffer badge */}

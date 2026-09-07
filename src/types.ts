@@ -430,6 +430,7 @@ export interface DbQuestionnaireVersion {
   published_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  created_by?: string | null;
   questions?: DbQuestion[];
 }
 

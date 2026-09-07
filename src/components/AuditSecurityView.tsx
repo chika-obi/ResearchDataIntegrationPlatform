@@ -243,7 +243,7 @@ CREATE POLICY "Admins and Owners can inspect audit trail" ON audit_logs
   };
 
   return (
-    <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -380,7 +380,7 @@ CREATE POLICY "Admins and Owners can inspect audit trail" ON audit_logs
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#c4c6cf]/30">
-                  {filteredLogs.map((log) => (
+                  {(filteredLogs || []).map((log) => (
                     <tr key={log.id} className="hover:bg-[#f9f9ff] transition-colors">
                       <td className="py-3 px-4 font-mono text-[11px] text-[#74777f]">
                         {log.timestamp}

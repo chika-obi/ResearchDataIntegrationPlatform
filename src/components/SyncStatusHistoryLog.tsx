@@ -350,8 +350,8 @@ export const SyncStatusHistoryLog: React.FC<SyncStatusHistoryLogProps> = ({
 
       {/* Log Feed List */}
       <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
-        {filteredLogs.length > 0 ? (
-          filteredLogs.map((entry) => {
+        {(filteredLogs || []).length > 0 ? (
+          (filteredLogs || []).map((entry) => {
             const isExpanded = expandedLogId === entry.id;
 
             // Determine status badge styling

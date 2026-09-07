@@ -267,7 +267,7 @@ export const CreateProjectModal: React.FC<CreateProjectModalProps> = ({
                     <span className="font-mono text-[11px] text-[#006a68]">Always starts with Q1</span>
                   </div>
                   <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                    {currentTemplate.questions.map((q) => (
+                    {(currentTemplate.questions || []).map((q) => (
                       <div
                         key={q.id}
                         className="p-2 bg-white rounded-lg border border-[#c4c6cf]/30 flex items-center justify-between text-xs gap-2"

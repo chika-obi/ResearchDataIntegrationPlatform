@@ -23,7 +23,7 @@ interface GlobalSearchBarProps {
 }
 
 export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
-  projects,
+  projects = [],
   onNavigate,
   onSelectProject,
   onSelectEnumerator,
@@ -101,11 +101,11 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
     if (!q) {
       // Quick Suggestions when search input is empty but focused
       const suggestions: GlobalSearchResultItem[] = [
-        ...projects.slice(0, 3).map((p) => ({
+        ...(projects || []).slice(0, 3).map((p) => ({
           id: `p-${p.id}`,
           category: 'project' as const,
           title: p.title,
-          subtitle: `${p.code} • ${p.category || 'Public Health'} • ${p.responsesCount.toLocaleString()} responses`,
+          subtitle: `${p.code} • ${p.category || 'Public Health'} • ${(p.responsesCount || 0).toLocaleString()} responses`,
           badge: p.status,
           badgeColor: p.status === 'Active' ? 'bg-[#006a68]/10 text-[#006a68]' : 'bg-slate-100 text-slate-700',
           icon: 'folder_open',
@@ -150,7 +150,7 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
 
     // 1. Projects Search
     if (selectedCategory === 'all' || selectedCategory === 'project') {
-      projects.forEach((proj) => {
+      (projects || []).forEach((proj) => {
         const matchTitle = proj.title.toLowerCase().includes(q);
         const matchCode = proj.code.toLowerCase().includes(q);
         const matchDesc = (proj.description || '').toLowerCase().includes(q);

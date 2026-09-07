@@ -44,7 +44,7 @@ export const VisualizationsView: React.FC = () => {
   ];
 
   return (
-    <div className="max-w-[1280px] mx-auto p-4 md:p-8 space-y-6 md:space-y-8 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 sm:space-y-6 md:space-y-8 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
@@ -176,7 +176,7 @@ export const VisualizationsView: React.FC = () => {
                     paddingAngle={4}
                     dataKey="value"
                   >
-                    {educationPie.map((entry, index) => (
+                    {(educationPie || []).map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
@@ -191,7 +191,7 @@ export const VisualizationsView: React.FC = () => {
           </div>
 
           <div className="space-y-2 border-t border-[#c4c6cf]/30 pt-3 text-xs">
-            {educationPie.map((item) => (
+            {(educationPie || []).map((item) => (
               <div key={item.name} className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />

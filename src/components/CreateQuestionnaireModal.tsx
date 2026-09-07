@@ -1,6 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Project, UserProfile, Question, DbQuestionnaire, DbQuestionnaireVersion } from '../types';
-import { CreateQuestionnaireParams } from '../lib/rdipDatabaseService';
+import {
+  CreateQuestionnaireParams,
+  FormattedSupabaseError,
+  formatSupabaseError,
+} from '../lib/rdipDatabaseService';
 
 interface CreateQuestionnaireModalProps {
   isOpen: boolean;
@@ -8,11 +12,16 @@ interface CreateQuestionnaireModalProps {
   projects: Project[];
   selectedProjectId?: string;
   currentUser: UserProfile;
+  initialError?: FormattedSupabaseError | null;
   onCreateQuestionnaire: (
     params: CreateQuestionnaireParams
   ) => Promise<{
     success: boolean;
     error?: string;
+    errorCode?: string;
+    errorDetails?: string;
+    parsedError?: FormattedSupabaseError;
+    warning?: string;
     questionnaire?: DbQuestionnaire;
     version?: DbQuestionnaireVersion;
   }>;
@@ -23,9 +32,10 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> = ({
   isOpen,
   onClose,
-  projects,
+  projects = [],
   selectedProjectId,
   currentUser,
+  initialError,
   onCreateQuestionnaire,
 }) => {
   const [projectId, setProjectId] = useState<string>('');
@@ -34,17 +44,50 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
   const [versionNumber, setVersionNumber] = useState<string>('v1.0');
   const [templateType, setTemplateType] = useState<'standard' | 'health' | 'blank'>('standard');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [errorDetails, setErrorDetails] = useState<FormattedSupabaseError | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [createdRecord, setCreatedRecord] = useState<{
+    id: string;
+    name: string;
+    version: string;
+    status: string;
+  } | null>(null);
+
+  const autoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const wasSuccessfulRef = useRef<boolean>(false);
 
   // Filter projects to those with real Supabase UUIDs
-  const validDbProjects = projects.filter((p) => p.id && UUID_REGEX.test(p.id));
+  const validDbProjects = (projects || []).filter((p) => p.id && UUID_REGEX.test(p.id));
+
+  // Cleanup auto-close timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoCloseTimerRef.current) {
+        clearTimeout(autoCloseTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
-      setErrorMessage(null);
-      setName('');
-      setDescription('');
-      setVersionNumber('v1.0');
+      if (wasSuccessfulRef.current) {
+        setName('');
+        setDescription('');
+        setVersionNumber('v1.0');
+        setTemplateType('standard');
+        setErrorMessage(null);
+        setErrorDetails(null);
+        setSuccessMessage(null);
+        setCreatedRecord(null);
+        wasSuccessfulRef.current = false;
+      }
+      setIsLoading(false);
+
+      if (initialError) {
+        setErrorDetails(initialError);
+        setErrorMessage(initialError.friendlyMessage);
+      }
 
       if (selectedProjectId && UUID_REGEX.test(selectedProjectId)) {
         setProjectId(selectedProjectId);
@@ -53,8 +96,12 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
       } else if (projects.length > 0) {
         setProjectId(projects[0].id);
       }
+    } else {
+      if (autoCloseTimerRef.current) {
+        clearTimeout(autoCloseTimerRef.current);
+      }
     }
-  }, [isOpen, selectedProjectId, projects.length]);
+  }, [isOpen, selectedProjectId, projects.length, initialError]);
 
   if (!isOpen) return null;
 
@@ -177,32 +224,47 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isEnumerator) {
-      setErrorMessage('Permission Denied: Field enumerators cannot author questionnaires.');
+      const parsed = formatSupabaseError(
+        'Permission Denied: Field enumerators cannot author questionnaires. Researcher role required.'
+      );
+      setErrorDetails(parsed);
+      setErrorMessage(parsed.friendlyMessage);
       return;
     }
 
     if (!name.trim()) {
-      setErrorMessage('Please enter a descriptive questionnaire title.');
+      const parsed = formatSupabaseError('Please enter a descriptive questionnaire title.');
+      setErrorDetails(parsed);
+      setErrorMessage(parsed.friendlyMessage);
       return;
     }
 
     if (!projectId) {
-      setErrorMessage('Please select a target research project.');
+      const parsed = formatSupabaseError('Please select a target research project.');
+      setErrorDetails(parsed);
+      setErrorMessage(parsed.friendlyMessage);
       return;
     }
 
     if (!isSelectedProjectValidUUID) {
-      setErrorMessage(
+      const parsed = formatSupabaseError(
         'Selected project does not have a valid Supabase database UUID. Please select an authoritative project stored in Supabase public.projects.'
       );
+      setErrorDetails(parsed);
+      setErrorMessage(parsed.friendlyMessage);
       return;
     }
 
+    // 1. Show loading state ("Saving to Supabase...")
     setIsLoading(true);
     setErrorMessage(null);
+    setErrorDetails(null);
+    setSuccessMessage(null);
+    setCreatedRecord(null);
 
     try {
       const questions = getStarterQuestions(templateType);
+      // 2. Wait for actual Supabase operation
       const result = await onCreateQuestionnaire({
         project_id: projectId,
         name: name.trim(),
@@ -216,15 +278,45 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
         },
       });
 
-      if (!result.success) {
-        setErrorMessage(result.error || 'Failed to create questionnaire in Supabase.');
-      } else {
-        onClose();
+      // 3. Do not show success if the Supabase operation fails
+      if (!result.success || !result.questionnaire) {
+        setIsLoading(false);
+        const parsed =
+          result.parsedError ||
+          formatSupabaseError({
+            message: result.error || 'Failed to create questionnaire in Supabase.',
+            code: result.errorCode,
+            details: result.errorDetails,
+          });
+        setErrorDetails(parsed);
+        setErrorMessage(parsed.friendlyMessage);
+        return;
       }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'An unexpected error occurred during questionnaire creation.');
-    } finally {
+
+      // 4. Supabase successfully returned the record
+      wasSuccessfulRef.current = true;
       setIsLoading(false);
+      setErrorMessage(null);
+      setErrorDetails(null);
+      setSuccessMessage('Questionnaire created successfully.');
+      setCreatedRecord({
+        id: result.questionnaire.id,
+        name: result.questionnaire.name,
+        version: result.version?.version_number || versionNumber.trim() || 'v1.0',
+        status: result.questionnaire.status || 'draft',
+      });
+
+      if (autoCloseTimerRef.current) {
+        clearTimeout(autoCloseTimerRef.current);
+      }
+      autoCloseTimerRef.current = setTimeout(() => {
+        onClose();
+      }, 1600);
+    } catch (err: any) {
+      setIsLoading(false);
+      const parsed = formatSupabaseError(err);
+      setErrorDetails(parsed);
+      setErrorMessage(parsed.friendlyMessage);
     }
   };
 
@@ -281,15 +373,143 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
             </div>
           )}
 
-          {/* Error Banner */}
-          {errorMessage && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-900 flex items-start gap-2.5">
-              <span className="material-symbols-outlined text-red-700 text-lg shrink-0 mt-0.5">
-                error
-              </span>
-              <div className="text-[11px]">
-                <p className="font-semibold">Creation Error</p>
-                <p className="mt-0.5">{errorMessage}</p>
+          {/* User-friendly Supabase Error Alert Box */}
+          {errorDetails && (
+            <div
+              id="create-questionnaire-error-alert"
+              role="alert"
+              aria-live="assertive"
+              className="p-4 bg-red-50/95 border-2 border-red-300 rounded-xl text-red-950 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200"
+            >
+              <div className="flex items-start justify-between gap-2.5">
+                <div className="flex items-start gap-3 flex-1 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-red-100 border border-red-200 flex items-center justify-center text-red-700 shrink-0 mt-0.5">
+                    <span className="material-symbols-outlined text-lg">error</span>
+                  </div>
+                  <div className="space-y-1.5 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="text-xs font-bold text-red-950 uppercase tracking-wide">
+                        {errorDetails.title}
+                      </h4>
+                      {errorDetails.code && (
+                        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 bg-red-100 text-red-800 rounded border border-red-200">
+                          {errorDetails.code}
+                        </span>
+                      )}
+                      <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[12px]">edit</span>
+                        Form Remains Editable
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-red-900 leading-relaxed font-medium">
+                      {errorDetails.friendlyMessage}
+                    </p>
+
+                    {errorDetails.actionHint && (
+                      <div className="text-[11px] text-red-950 bg-white/80 p-2.5 rounded-lg border border-red-200 flex items-start gap-1.5">
+                        <span className="material-symbols-outlined text-[15px] text-amber-600 shrink-0 mt-0.5">
+                          lightbulb
+                        </span>
+                        <span>
+                          <strong>Recommended Action:</strong> {errorDetails.actionHint}
+                        </span>
+                      </div>
+                    )}
+
+                    {errorDetails.technicalDetails && (
+                      <details className="text-[11px] text-red-800/80 mt-1">
+                        <summary className="cursor-pointer font-medium hover:text-red-950 select-none flex items-center gap-1">
+                          <span>View Technical Details</span>
+                          <span className="material-symbols-outlined text-[14px]">expand_more</span>
+                        </summary>
+                        <pre className="mt-1 p-2 bg-white/90 border border-red-200 rounded font-mono text-[10px] whitespace-pre-wrap break-all text-red-900">
+                          {errorDetails.technicalDetails}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorDetails(null);
+                    setErrorMessage(null);
+                  }}
+                  className="text-red-400 hover:text-red-800 p-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer shrink-0"
+                  title="Dismiss error alert"
+                >
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Success Confirmation Banner / View */}
+          {successMessage && (
+            <div
+              id="create-questionnaire-success-confirmation"
+              role="status"
+              aria-live="polite"
+              className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-200"
+            >
+              <div className="flex items-center gap-2.5 text-emerald-800">
+                <span className="material-symbols-outlined text-emerald-600 text-2xl">
+                  task_alt
+                </span>
+                <div>
+                  <p className="text-sm font-bold text-emerald-950">
+                    {successMessage}
+                  </p>
+                  <p className="text-[11px] text-emerald-700">
+                    Authoritative record inserted into Supabase table <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded text-emerald-900 font-semibold">public.questionnaires</code>
+                  </p>
+                </div>
+              </div>
+
+              {createdRecord && (
+                <div className="bg-white/95 border border-emerald-200 rounded-lg p-3 space-y-2 text-xs text-[#161c27]">
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-[#74777f] font-medium">Database Questionnaire UUID:</span>
+                    <span className="font-mono font-bold text-emerald-800 select-all bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                      {createdRecord.id}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-[#74777f] font-medium">Instrument Title:</span>
+                    <span className="font-semibold text-[#002045]">
+                      {createdRecord.name}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-[#74777f] font-medium">Initial Version:</span>
+                    <span className="font-mono font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                      {createdRecord.version} (status: {createdRecord.status})
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] text-emerald-800 flex items-center gap-1.5 font-medium">
+                  <span className="material-symbols-outlined text-[15px] animate-spin">sync</span>
+                  Opening Questionnaire Studio...
+                </span>
+                <button
+                  type="button"
+                  id="create-questionnaire-open-studio-btn"
+                  onClick={() => {
+                    if (autoCloseTimerRef.current) {
+                      clearTimeout(autoCloseTimerRef.current);
+                    }
+                    onClose();
+                  }}
+                  className="px-3.5 py-1.5 bg-[#006a68] text-white rounded-lg text-xs font-semibold hover:bg-[#004f4e] transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
+                >
+                  <span>Open Studio Now</span>
+                  <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                </button>
               </div>
             </div>
           )}
@@ -313,7 +533,7 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
                   : 'border-red-300 bg-red-50/30'
               }`}
             >
-              {projects.map((p) => {
+              {(projects || []).map((p) => {
                 const isValidUUID = p.id && UUID_REGEX.test(p.id);
                 return (
                   <option key={p.id} value={p.id}>
@@ -322,7 +542,7 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
                 );
               })}
             </select>
-            {!isSelectedProjectValidUUID && projects.length > 0 && (
+            {!isSelectedProjectValidUUID && (projects || []).length > 0 && (
               <p className="text-[11px] text-red-600 mt-1 flex items-center gap-1">
                 <span className="material-symbols-outlined text-[14px]">warning</span>
                 The selected project has a non-UUID ID. Please select a project saved in Supabase public.projects.
@@ -425,28 +645,56 @@ export const CreateQuestionnaireModal: React.FC<CreateQuestionnaireModalProps> =
 
           {/* Modal Action Buttons */}
           <div className="pt-3 border-t border-[#c4c6cf]/40 flex justify-between items-center">
-            <button
-              id="create-questionnaire-cancel-btn"
-              type="button"
-              onClick={onClose}
-              disabled={isLoading}
-              className="px-4 py-2 text-[#43474e] hover:text-[#161c27] font-semibold text-xs"
-            >
-              Cancel
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                id="create-questionnaire-cancel-btn"
+                type="button"
+                onClick={onClose}
+                disabled={isLoading}
+                className="px-4 py-2 text-[#43474e] hover:text-[#161c27] font-semibold text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              {(name || description) && !isLoading && (
+                <button
+                  id="create-questionnaire-clear-btn"
+                  type="button"
+                  onClick={() => {
+                    setName('');
+                    setDescription('');
+                    setErrorDetails(null);
+                    setErrorMessage(null);
+                  }}
+                  className="text-xs text-[#73777f] hover:text-red-700 underline underline-offset-2 transition-colors cursor-pointer"
+                  title="Clear inputs to start fresh"
+                >
+                  Clear Draft
+                </button>
+              )}
+            </div>
 
             <button
               id="create-questionnaire-submit-btn"
               type="submit"
-              disabled={isLoading || isEnumerator || !isSelectedProjectValidUUID || !name.trim()}
-              className="px-5 py-2.5 bg-[#006a68] text-white rounded-lg font-semibold hover:bg-[#004f4e] shadow-xs flex items-center gap-2 transition-colors disabled:opacity-50 text-xs"
+              disabled={isLoading || isEnumerator || !isSelectedProjectValidUUID || !name.trim() || Boolean(successMessage)}
+              className="px-5 py-2.5 bg-[#006a68] text-white rounded-lg font-semibold hover:bg-[#004f4e] shadow-xs flex items-center gap-2 transition-colors disabled:opacity-50 text-xs cursor-pointer"
             >
               {isLoading ? (
                 <>
                   <span className="material-symbols-outlined text-[16px] animate-spin">
                     refresh
                   </span>
-                  <span>Writing to Supabase...</span>
+                  <span>Saving to Supabase...</span>
+                </>
+              ) : successMessage ? (
+                <>
+                  <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                  <span>Questionnaire Created</span>
+                </>
+              ) : errorDetails ? (
+                <>
+                  <span className="material-symbols-outlined text-[16px]">sync</span>
+                  <span>Retry Creation in DB</span>
                 </>
               ) : (
                 <>

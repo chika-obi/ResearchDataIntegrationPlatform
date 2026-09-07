@@ -14,6 +14,8 @@ interface TopAppBarProps {
   onSelectProject?: (project: Project) => void;
   onSelectEnumerator?: (enumeratorId: string) => void;
   onSelectQuestion?: (questionId: string) => void;
+  isSidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const TopAppBar: React.FC<TopAppBarProps> = ({
@@ -26,10 +28,13 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   projects = [],
   onSelectProject,
   onSelectEnumerator,
-  onSelectQuestion
+  onSelectQuestion,
+  isSidebarCollapsed = false,
+  onToggleSidebar
 }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showDbDetails, setShowDbDetails] = useState(false);
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
 
   // Supabase Connection Status
   const [supabaseStatus, setSupabaseStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
@@ -76,66 +81,129 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   ];
 
   return (
-    <header className="bg-[#f9f9ff] border-b border-[#c4c6cf]/60 h-16 flex items-center justify-between px-4 md:px-8 z-40 sticky top-0 w-full shrink-0">
-      {/* Left side */}
-      <div className="flex items-center gap-3 shrink-0 min-w-0">
-        {/* Mobile menu hamburger */}
-        <button
-          onClick={onOpenMobileMenu}
-          className="md:hidden text-[#002045] p-2 -ml-2 rounded-full hover:bg-[#e3e8f9] transition-colors shrink-0"
-          title="Open Menu"
-        >
-          <span className="material-symbols-outlined text-[24px]">menu</span>
-        </button>
-
-        <div
-          onClick={() => onNavigate(currentUser.role === 'enumerator' ? 'offline-collector' : 'dashboard')}
-          className="flex items-center gap-2.5 cursor-pointer shrink-0"
-        >
-          <div className="w-8 h-8 rounded-lg bg-[#1a365d] text-white flex items-center justify-center font-bold text-sm shadow-xs">
-            R
-          </div>
-          <div>
-            <span className="text-[19px] font-black text-[#002045] tracking-tight">RDIP</span>
-            <span className="hidden sm:inline-block ml-2 text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-[#1a365d]/10 text-[#1a365d]">
-              {currentUser.role === 'enumerator' ? 'Field Terminal' : 'Research Intelligence'}
-            </span>
+    <header className="bg-[#f9f9ff] border-b border-[#c4c6cf]/60 h-16 flex items-center justify-between px-3 sm:px-4 md:px-6 lg:px-8 z-40 sticky top-0 w-full shrink-0">
+      {/* Mobile Search Overlay */}
+      {isMobileSearchOpen && currentUser.role !== 'enumerator' ? (
+        <div className="flex md:hidden items-center gap-2 w-full animate-in fade-in duration-150">
+          <button
+            onClick={() => setIsMobileSearchOpen(false)}
+            className="w-10 h-10 rounded-full flex items-center justify-center text-[#43474e] hover:bg-[#e3e8f9] transition-colors shrink-0 cursor-pointer"
+            title="Close Search"
+            aria-label="Close Search"
+          >
+            <span className="material-symbols-outlined text-[22px]">arrow_back</span>
+          </button>
+          <div className="flex-1 min-w-0">
+            <GlobalSearchBar
+              projects={projects}
+              onNavigate={(section) => {
+                setIsMobileSearchOpen(false);
+                onNavigate(section);
+              }}
+              onSelectProject={(p) => {
+                setIsMobileSearchOpen(false);
+                if (onSelectProject) onSelectProject(p);
+              }}
+              onSelectEnumerator={(eId) => {
+                setIsMobileSearchOpen(false);
+                if (onSelectEnumerator) onSelectEnumerator(eId);
+              }}
+              onSelectQuestion={(qId) => {
+                setIsMobileSearchOpen(false);
+                if (onSelectQuestion) onSelectQuestion(qId);
+              }}
+            />
           </div>
         </div>
-
-        {/* Section breadcrumbs (Desktop) */}
-        <div className="hidden xl:flex items-center gap-2 ml-4 text-[13px] text-[#43474e] shrink-0">
-          <span className="material-symbols-outlined text-[16px] text-[#74777f]">chevron_right</span>
-          <span className="capitalize font-semibold text-[#002045]">
-            {currentUser.role === 'enumerator' ? 'Assigned Field Surveys' : currentSection.replace('-', ' ')}
-          </span>
-          {isOfflineMode && (
-            <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#ba1a1a]/10 text-[#ba1a1a] border border-[#ba1a1a]/20">
-              <span className="material-symbols-outlined text-[12px]">wifi_off</span>
-              Offline
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Global Quick Search Bar (Disabled for enumerators to enforce strict multi-project isolation) */}
-      {currentUser.role !== 'enumerator' ? (
-        <GlobalSearchBar
-          projects={projects}
-          onNavigate={onNavigate}
-          onSelectProject={onSelectProject}
-          onSelectEnumerator={onSelectEnumerator}
-          onSelectQuestion={onSelectQuestion}
-        />
       ) : (
-        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#dde2f3]/40 border border-[#c4c6cf]/40 text-xs text-[#002045]">
-          <span className="material-symbols-outlined text-[16px] text-[#006a68]">lock</span>
-          <span className="font-medium">Isolated Field Session: {currentUser.name}</span>
-        </div>
-      )}
+        <>
+          {/* Left side */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 md:gap-3 shrink-0 min-w-0">
+            {/* Mobile menu hamburger */}
+            <button
+              onClick={onOpenMobileMenu}
+              className="md:hidden text-[#002045] w-10 h-10 rounded-xl flex items-center justify-center hover:bg-[#e3e8f9] active:bg-[#dde2f3] transition-colors shrink-0 cursor-pointer"
+              title="Open Navigation Menu"
+              aria-label="Open Navigation Menu"
+            >
+              <span className="material-symbols-outlined text-[24px]">menu</span>
+            </button>
 
-      {/* Right side tools */}
-      <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+            {/* Desktop / Tablet Sidebar collapse toggle */}
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="hidden md:flex text-[#002045] w-9 h-9 rounded-lg items-center justify-center hover:bg-[#e3e8f9] transition-colors shrink-0 cursor-pointer"
+                title={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+                aria-label="Toggle Sidebar"
+              >
+                <span className="material-symbols-outlined text-[20px]">
+                  {isSidebarCollapsed ? 'menu_open' : 'menu'}
+                </span>
+              </button>
+            )}
+
+            <div
+              onClick={() => onNavigate(currentUser.role === 'enumerator' ? 'offline-collector' : 'dashboard')}
+              className="flex items-center gap-2 cursor-pointer shrink-0 select-none"
+            >
+              <div className="w-8 h-8 rounded-lg bg-[#1a365d] text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+                R
+              </div>
+              <div className="min-w-0">
+                <span className="text-[17px] sm:text-[19px] font-black text-[#002045] tracking-tight">RDIP</span>
+                <span className="hidden sm:inline-block ml-1.5 text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-[#1a365d]/10 text-[#1a365d]">
+                  {currentUser.role === 'enumerator' ? 'Field Terminal' : 'Research Intelligence'}
+                </span>
+              </div>
+            </div>
+
+            {/* Section breadcrumbs (Desktop) */}
+            <div className="hidden xl:flex items-center gap-2 ml-3 text-[13px] text-[#43474e] shrink-0">
+              <span className="material-symbols-outlined text-[16px] text-[#74777f]">chevron_right</span>
+              <span className="capitalize font-semibold text-[#002045]">
+                {currentUser.role === 'enumerator' ? 'Assigned Field Surveys' : currentSection.replace('-', ' ')}
+              </span>
+              {isOfflineMode && (
+                <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#ba1a1a]/10 text-[#ba1a1a] border border-[#ba1a1a]/20">
+                  <span className="material-symbols-outlined text-[12px]">wifi_off</span>
+                  Offline
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Center Search Bar (Tablet and Desktop) */}
+          <div className="hidden md:flex flex-1 max-w-xl mx-2 lg:mx-6 min-w-0">
+            {currentUser.role !== 'enumerator' ? (
+              <GlobalSearchBar
+                projects={projects}
+                onNavigate={onNavigate}
+                onSelectProject={onSelectProject}
+                onSelectEnumerator={onSelectEnumerator}
+                onSelectQuestion={onSelectQuestion}
+              />
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#dde2f3]/40 border border-[#c4c6cf]/40 text-xs text-[#002045]">
+                <span className="material-symbols-outlined text-[16px] text-[#006a68]">lock</span>
+                <span className="font-medium truncate">Isolated Field Session: {currentUser.name}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Right side tools */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            {/* Mobile Search Button */}
+            {currentUser.role !== 'enumerator' && (
+              <button
+                onClick={() => setIsMobileSearchOpen(true)}
+                className="md:hidden w-9 h-9 rounded-full flex items-center justify-center text-[#43474e] hover:text-[#002045] hover:bg-[#f1f3ff] transition-colors cursor-pointer"
+                title="Search initiatives and questions"
+                aria-label="Open Search"
+              >
+                <span className="material-symbols-outlined text-[20px]">search</span>
+              </button>
+            )}
         {/* Supabase Connection Status Light Indicator */}
         <div className="relative">
           <button
@@ -339,7 +407,9 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
           </div>
         </button>
       </div>
-    </header>
+    </>
+  )}
+</header>
   );
 };
 
