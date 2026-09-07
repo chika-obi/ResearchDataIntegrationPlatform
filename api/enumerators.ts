@@ -19,11 +19,11 @@ export async function OPTIONS() {
 export async function POST(request: Request) {
   try {
     const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-    const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+    const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
     const secretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!supabaseUrl || !publishableKey || !secretKey) {
-      return json({ error: 'Enumerator provisioning is not configured on the server.' }, 500);
+      return json({ error: 'Enumerator provisioning is not configured on the server. Add the Supabase server secret to the Vercel project environment.' }, 500);
     }
 
     const authorization = request.headers.get('authorization');
@@ -79,26 +79,17 @@ export async function POST(request: Request) {
       return json({ error: 'Enumerators cannot be registered to an archived or completed project.' }, 400);
     }
 
-    let enumeratorUserId: string | null = null;
-
-    const { data: existingUsers, error: usersError } = await admin.auth.admin.listUsers({
-      page: 1,
-      perPage: 1000,
-    });
+    const { data: existingUsers, error: usersError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
     if (usersError) return json({ error: usersError.message }, 500);
-
     const existingUser = existingUsers.users.find((u) => (u.email || '').toLowerCase() === email);
+    let enumeratorUserId: string;
 
     if (existingUser) {
       enumeratorUserId = existingUser.id;
       if (enumeratorUserId === requesterId) return json({ error: 'The researcher account cannot also be registered as an enumerator.' }, 400);
     } else {
-      const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-        data: { full_name: name, role: 'enumerator' },
-      });
-      if (inviteError || !invited.user) {
-        return json({ error: inviteError?.message || 'Unable to create the enumerator account.' }, 500);
-      }
+      const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, { data: { full_name: name, role: 'enumerator' } });
+      if (inviteError || !invited.user) return json({ error: inviteError?.message || 'Unable to create the enumerator account.' }, 500);
       enumeratorUserId = invited.user.id;
     }
 
