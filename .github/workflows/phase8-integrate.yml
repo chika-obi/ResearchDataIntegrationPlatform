@@ -1,0 +1,65 @@
+name: RDIP Phase 8 Integration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-phase8:
+    if: contains(github.event.head_commit.message, 'Phase 8') == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Integrate assignment UI
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/components/EnumeratorsView.tsx')
+          s = p.read_text()
+          if 'QuestionnaireAssignmentModal' in s:
+              print('Phase 8 UI already integrated')
+              raise SystemExit(0)
+
+          s = s.replace(
+              "import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';",
+              "import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';\nimport { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';"
+          )
+          s = s.replace(
+              "  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);",
+              "  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);\n  const [isQuestionnaireAssignmentOpen, setIsQuestionnaireAssignmentOpen] = useState(false);"
+          )
+          old = '''          <button\n            onClick={() => setIsAssignModalOpen(true)}\n            className="bg-[#1a365d] hover:bg-[#002045] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">add</span>\n            <span>Assign Agent</span>\n          </button>'''
+          new = '''          <button\n            onClick={() => setIsQuestionnaireAssignmentOpen(true)}\n            className="bg-[#006a68] hover:bg-[#004f4e] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">assignment_turned_in</span>\n            <span>Assign Questionnaire</span>\n          </button>\n\n          <button\n            onClick={() => setIsAssignModalOpen(true)}\n            className="bg-[#1a365d] hover:bg-[#002045] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">add</span>\n            <span>Assign Agent</span>\n          </button>'''
+          if old not in s:
+              raise SystemExit('Expected Assign Agent button was not found; no file changes made.')
+          s = s.replace(old, new, 1)
+          marker = '      {/* Assign Modal */}'
+          modal = '''      {/* Phase 8: Questionnaire Assignment */}\n      <QuestionnaireAssignmentModal\n        isOpen={isQuestionnaireAssignmentOpen}\n        onClose={() => setIsQuestionnaireAssignmentOpen(false)}\n      />\n\n'''
+          if marker not in s:
+              raise SystemExit('Expected modal insertion marker was not found; no file changes made.')
+          s = s.replace(marker, modal + marker, 1)
+          p.write_text(s)
+          print('Phase 8 UI integrated into EnumeratorsView.tsx')
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Type check
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/EnumeratorsView.tsx
+          git commit -m "feat: integrate Phase 8 questionnaire assignment UI" || exit 0
+          git push origin main
