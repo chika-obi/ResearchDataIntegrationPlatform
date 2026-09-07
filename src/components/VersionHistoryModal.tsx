@@ -3,6 +3,7 @@ import { DbQuestionnaire, DbQuestionnaireVersion } from '../types';
 import {
   fetchQuestionnaireVersions,
   updateQuestionnaireCurrentVersion,
+  publishQuestionnaireVersionInDb,
   formatSupabaseError,
   FormattedSupabaseError,
 } from '../lib/rdipDatabaseService';
@@ -29,6 +30,7 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
   const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<FormattedSupabaseError | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [publishConfirmVersion, setPublishConfirmVersion] = useState<DbQuestionnaireVersion | null>(null);
 
   const loadVersions = async () => {
     setLoading(true);
@@ -67,6 +69,65 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
     setErrorDetails(null);
     try {
       await onSelectVersion(versionId);
+      onClose();
+    } catch (err: any) {
+      setErrorDetails(formatSupabaseError(err));
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
+  const requestPublish = (version: DbQuestionnaireVersion) => {
+    if (isEnumerator || version.status !== 'draft') return;
+    setErrorDetails(null);
+    setPublishConfirmVersion(version);
+  };
+
+  const handlePublishVersion = async () => {
+    if (!publishConfirmVersion || isEnumerator) return;
+
+    const version = publishConfirmVersion;
+    setPublishConfirmVersion(null);
+    setActionInProgressId(version.id);
+    setErrorDetails(null);
+
+    try {
+      // Lightweight client-side preflight. Database RLS/triggers remain authoritative.
+      const questionCount = Array.isArray(version.schema_definition?.questions)
+        ? version.schema_definition.questions.length
+        : 0;
+
+      if (questionCount === 0) {
+        setErrorDetails({
+          title: 'Questionnaire Cannot Be Published',
+          friendlyMessage: 'This draft does not contain any questions. Add at least one question before publishing.',
+          code: 'PUBLISH_VALIDATION',
+          actionHint: 'Open the draft, add the required questions and options, save the draft, then publish it.',
+        });
+        return;
+      }
+
+      if (version.status !== 'draft') {
+        setErrorDetails({
+          title: 'Version Is Not a Draft',
+          friendlyMessage: `Version ${version.version_number} is already ${version.status.toUpperCase()} and cannot be published again.`,
+          code: 'INVALID_VERSION_STATUS',
+        });
+        return;
+      }
+
+      const res = await publishQuestionnaireVersionInDb(version.id, questionnaire.id);
+      if (!res.success) {
+        setErrorDetails(formatSupabaseError(res.error || 'Failed to publish questionnaire version.'));
+        return;
+      }
+
+      setSuccessToast(`✓ ${version.version_number} published successfully in Supabase`);
+      await loadVersions();
+
+      // Reload the published version through the parent so Questionnaire Studio
+      // immediately reflects PUBLISHED / read-only state without changing layout.
+      await onSelectVersion(version.id);
       onClose();
     } catch (err: any) {
       setErrorDetails(formatSupabaseError(err));
@@ -133,15 +194,16 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
         {/* Error Alert Box */}
         {errorDetails && (
           <div className="p-4 mx-4 sm:mx-6 mt-4 bg-red-50 border border-red-300 rounded-xl text-red-900 text-xs flex items-start gap-2.5">
-            <span className="material-symbols-outlined text-red-600 text-lg shrink-0 mt-0.5">
-              error
-            </span>
+            <span className="material-symbols-outlined text-red-600 text-lg shrink-0 mt-0.5">error</span>
             <div className="flex-1 min-w-0">
               <p className="font-bold">{errorDetails.friendlyMessage}</p>
               {errorDetails.technicalDetails && (
                 <p className="text-[11px] font-mono text-red-700 mt-1 whitespace-pre-wrap">
                   {errorDetails.technicalDetails}
                 </p>
+              )}
+              {errorDetails.actionHint && (
+                <p className="text-[11px] text-red-800 mt-1">{errorDetails.actionHint}</p>
               )}
             </div>
           </div>
@@ -193,11 +255,8 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
                     {/* Left: Version Metadata */}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-sm font-bold text-[#002045]">
-                          {ver.version_number}
-                        </span>
+                        <span className="font-mono text-sm font-bold text-[#002045]">{ver.version_number}</span>
 
-                        {/* Status Badge */}
                         {isPublished ? (
                           <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                             <span className="material-symbols-outlined text-[12px]">lock</span>
@@ -214,7 +273,6 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
                           </span>
                         )}
 
-                        {/* Active in Studio Tag */}
                         {isActiveInStudio && (
                           <span className="text-[10px] bg-[#1a365d] text-white font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                             <span className="material-symbols-outlined text-[12px]">visibility</span>
@@ -222,7 +280,6 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
                           </span>
                         )}
 
-                        {/* Pointer Tag */}
                         {isCurrentInDb && (
                           <span className="text-[10px] bg-[#006a68]/15 text-[#006a68] border border-[#006a68]/30 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                             <span className="material-symbols-outlined text-[12px]">star</span>
@@ -232,35 +289,28 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
                       </div>
 
                       {ver.title && ver.title !== ver.version_number && (
-                        <p className="text-xs font-semibold text-[#1a365d] mt-1.5 truncate">
-                          {ver.title}
-                        </p>
+                        <p className="text-xs font-semibold text-[#1a365d] mt-1.5 truncate">{ver.title}</p>
                       )}
 
                       {ver.description && (
-                        <p className="text-[11px] text-[#43474e] mt-0.5 line-clamp-2">
-                          {ver.description}
-                        </p>
+                        <p className="text-[11px] text-[#43474e] mt-0.5 line-clamp-2">{ver.description}</p>
                       )}
 
                       <div className="flex items-center gap-3 text-[11px] text-[#74777f] font-mono mt-2">
                         <span>{itemCount} question{itemCount === 1 ? '' : 's'}</span>
                         <span>•</span>
                         <span>Created: {ver.created_at ? new Date(ver.created_at).toLocaleDateString() : 'Recent'}</span>
-                        {(() => {
-                          const creatorId = ver.created_by || (ver as any).schema_definition?.created_by || ver.published_by;
-                          return creatorId ? (
-                            <>
-                              <span>•</span>
-                              <span className="truncate max-w-[120px]">By: {String(creatorId).slice(0, 8)}...</span>
-                            </>
-                          ) : null;
-                        })()}
+                        {ver.published_at && (
+                          <>
+                            <span>•</span>
+                            <span>Published: {new Date(ver.published_at).toLocaleDateString()}</span>
+                          </>
+                        )}
                       </div>
                     </div>
 
                     {/* Right: Actions */}
-                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center flex-wrap justify-end">
                       {!isActiveInStudio && (
                         <button
                           type="button"
@@ -273,7 +323,21 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
                         </button>
                       )}
 
-                      {!isCurrentInDb && !isEnumerator && (
+                      {isDraft && !isEnumerator && (
+                        <button
+                          id={`publish-version-${ver.version_number.replace('.', '-')}`}
+                          type="button"
+                          onClick={() => requestPublish(ver)}
+                          disabled={actionInProgressId === ver.id}
+                          className="px-2.5 py-1.5 bg-[#006a68] hover:bg-[#00514f] text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title="Publish this draft questionnaire version"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">publish</span>
+                          <span>Publish</span>
+                        </button>
+                      )}
+
+                      {!isCurrentInDb && !isEnumerator && !isPublished && (
                         <button
                           type="button"
                           onClick={() => handleSetCurrent(ver)}
@@ -307,6 +371,70 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Publish Confirmation */}
+      {publishConfirmVersion && (
+        <div
+          id="publish-confirmation-overlay"
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-[#002045]/60 backdrop-blur-xs animate-in fade-in duration-150"
+        >
+          <div
+            id="publish-confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="publish-confirmation-title"
+            className="bg-white rounded-2xl shadow-2xl border border-[#c4c6cf]/60 w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-150"
+          >
+            <div className="bg-[#1a365d] text-white p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined text-[#91f0ed]">publish</span>
+                </div>
+                <div>
+                  <h3 id="publish-confirmation-title" className="text-base font-bold">Publish Questionnaire Version</h3>
+                  <p className="text-xs text-white/80">This action changes the version lifecycle state.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <div className="bg-[#f1f3ff] border border-[#c4c6cf]/70 rounded-xl p-3">
+                <p className="text-xs font-bold text-[#002045]">{questionnaire.name}</p>
+                <p className="text-sm font-mono font-bold text-[#1a365d] mt-1">{publishConfirmVersion.version_number}</p>
+                <p className="text-[11px] text-[#43474e] mt-1">Current status: DRAFT</p>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 text-xs text-amber-950">
+                <div className="flex items-start gap-2">
+                  <span className="material-symbols-outlined text-[18px] mt-0.5">lock</span>
+                  <p>
+                    Publishing will make this version <strong>read-only</strong>. Future changes must be made by creating a new draft version.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#f9f9ff] border-t border-[#c4c6cf]/60 p-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPublishConfirmVersion(null)}
+                className="px-4 py-2 text-xs font-semibold text-[#43474e] hover:bg-[#f1f3ff] rounded-lg border border-[#c4c6cf] transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                id="confirm-publish-version-btn"
+                type="button"
+                onClick={handlePublishVersion}
+                className="px-4 py-2 bg-[#006a68] hover:bg-[#00514f] text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[15px]">publish</span>
+                Publish {publishConfirmVersion.version_number}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
