@@ -3,6 +3,7 @@ import { Enumerator } from '../types';
 import { INITIAL_ENUMERATORS } from '../data/mockData';
 import { getStoredEnumerators, saveStoredEnumerators } from '../lib/enumeratorTelemetry';
 import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';
+import { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';
 
 interface EnumeratorsViewProps {
   onOpenOfflineCollector: () => void;
@@ -17,6 +18,7 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
   });
   const [viewMode, setViewMode] = useState<'map_and_table' | 'full_map' | 'table_only'>('map_and_table');
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [isQuestionnaireAssignmentOpen, setIsQuestionnaireAssignmentOpen] = useState(false);
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [messageToast, setMessageToast] = useState<string | null>(null);
@@ -209,6 +211,14 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
           >
             <span className="material-symbols-outlined text-[16px]">tablet_mac</span>
             <span>Offline Field App</span>
+          </button>
+
+          <button
+            onClick={() => setIsQuestionnaireAssignmentOpen(true)}
+            className="bg-[#006a68] hover:bg-[#004f4e] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px]">assignment_turned_in</span>
+            <span>Assign Questionnaire</span>
           </button>
 
           <button
@@ -506,6 +516,12 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
           <span className="text-xs font-semibold">{messageToast}</span>
         </div>
       )}
+
+      {/* Phase 8: Questionnaire Assignment */}
+      <QuestionnaireAssignmentModal
+        isOpen={isQuestionnaireAssignmentOpen}
+        onClose={() => setIsQuestionnaireAssignmentOpen(false)}
+      />
 
       {/* Assign Modal */}
       {isAssignModalOpen && (
