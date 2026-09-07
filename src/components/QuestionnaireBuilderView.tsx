@@ -155,23 +155,40 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
           const latest = qList[0];
           setActiveDbQuestionnaire(latest);
           setSurveyTitle(latest.name);
-          setActiveVersionId(latest.current_version_id || latest.current_version?.id || null);
+          const vId = latest.current_version_id || latest.current_version?.id || null;
+          setActiveVersionId(vId);
           setActiveVersionRecord(latest.current_version || null);
 
           const verNum = latest.current_version?.version_number || 'v1.0';
           const verStatus = latest.current_version?.status || 'draft';
           setSurveyVersion(`${verNum} (${verStatus.toUpperCase()})`);
 
-          if (
-            latest.current_version?.schema_definition?.questions &&
-            Array.isArray(latest.current_version.schema_definition.questions) &&
-            latest.current_version.schema_definition.questions.length > 0
-          ) {
-            const normalized = ensureQuestionsStartWithQ1(
-              latest.current_version.schema_definition.questions
-            );
-            setQuestions(normalized);
-            setSelectedQuestionId(normalized[0].id);
+          // Authoritatively load questions and options from Supabase
+          if (vId) {
+            const verRes = await fetchQuestionnaireVersionById(vId);
+            if (!isMounted) return;
+            if (verRes.version) {
+              setActiveVersionRecord(verRes.version);
+              const vNum = verRes.version.version_number || verNum;
+              const vStat = verRes.version.status || verStatus;
+              setSurveyVersion(`${vNum} (${vStat.toUpperCase()})`);
+            }
+            if (verRes.questions && verRes.questions.length > 0) {
+              const normalized = ensureQuestionsStartWithQ1(verRes.questions);
+              setQuestions(normalized);
+              setSelectedQuestionId(normalized[0].id);
+              localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+            } else if (
+              latest.current_version?.schema_definition?.questions &&
+              Array.isArray(latest.current_version.schema_definition.questions) &&
+              latest.current_version.schema_definition.questions.length > 0
+            ) {
+              const normalized = ensureQuestionsStartWithQ1(
+                latest.current_version.schema_definition.questions
+              );
+              setQuestions(normalized);
+              setSelectedQuestionId(normalized[0].id);
+            }
           }
           setDbSyncStatus('synced');
         } else {
@@ -198,27 +215,43 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
     };
   }, [selectedProject?.id]);
 
-  const handleSelectDbQuestionnaire = (qId: string) => {
+  const handleSelectDbQuestionnaire = async (qId: string) => {
     const q = projectQuestionnaires.find((item) => item.id === qId);
     if (!q) return;
 
     setActiveDbQuestionnaire(q);
     setSurveyTitle(q.name);
-    setActiveVersionId(q.current_version_id || q.current_version?.id || null);
+    const vId = q.current_version_id || q.current_version?.id || null;
+    setActiveVersionId(vId);
     setActiveVersionRecord(q.current_version || null);
 
     const verNum = q.current_version?.version_number || 'v1.0';
     const verStatus = q.current_version?.status || 'draft';
     setSurveyVersion(`${verNum} (${verStatus.toUpperCase()})`);
 
-    if (
-      q.current_version?.schema_definition?.questions &&
-      Array.isArray(q.current_version.schema_definition.questions) &&
-      q.current_version.schema_definition.questions.length > 0
-    ) {
-      const normalized = ensureQuestionsStartWithQ1(q.current_version.schema_definition.questions);
-      setQuestions(normalized);
-      setSelectedQuestionId(normalized[0].id);
+    // Authoritatively load questions and options from Supabase
+    if (vId) {
+      const verRes = await fetchQuestionnaireVersionById(vId);
+      if (verRes.version) {
+        setActiveVersionRecord(verRes.version);
+        const vNum = verRes.version.version_number || verNum;
+        const vStat = verRes.version.status || verStatus;
+        setSurveyVersion(`${vNum} (${vStat.toUpperCase()})`);
+      }
+      if (verRes.questions && verRes.questions.length > 0) {
+        const normalized = ensureQuestionsStartWithQ1(verRes.questions);
+        setQuestions(normalized);
+        setSelectedQuestionId(normalized[0].id);
+        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+      } else if (
+        q.current_version?.schema_definition?.questions &&
+        Array.isArray(q.current_version.schema_definition.questions) &&
+        q.current_version.schema_definition.questions.length > 0
+      ) {
+        const normalized = ensureQuestionsStartWithQ1(q.current_version.schema_definition.questions);
+        setQuestions(normalized);
+        setSelectedQuestionId(normalized[0].id);
+      }
     }
     setDbSyncStatus('synced');
   };
@@ -305,7 +338,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       };
     }
 
-    const { questionnaire, version } = result.data;
+    const { questionnaire, version, questions: createdQuestions } = result.data;
 
     try {
       // Obtain real database questionnaire record and update frontend state
@@ -321,7 +354,12 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       setSurveyTitle(questionnaire.name);
       setSurveyVersion(`${version.version_number} (DRAFT)`);
 
-      if (
+      if (createdQuestions && createdQuestions.length > 0) {
+        const normalized = ensureQuestionsStartWithQ1(createdQuestions);
+        setQuestions(normalized);
+        setSelectedQuestionId(normalized[0].id);
+        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+      } else if (
         version.schema_definition?.questions &&
         Array.isArray(version.schema_definition.questions) &&
         version.schema_definition.questions.length > 0
@@ -329,6 +367,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         const normalized = ensureQuestionsStartWithQ1(version.schema_definition.questions);
         setQuestions(normalized);
         setSelectedQuestionId(normalized[0].id);
+        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
       }
 
       // Synchronize parent research project if user created for another project
@@ -347,6 +386,7 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
         success: true,
         questionnaire,
         version,
+        questions: createdQuestions,
       };
     } catch (uiErr: any) {
       console.warn('[RDIP Studio] Questionnaire saved to DB but frontend UI state note:', uiErr);
@@ -612,8 +652,13 @@ export const QuestionnaireBuilderView: React.FC<QuestionnaireBuilderViewProps> =
       if (!res.success) {
         setDbStatusToast(`Save notice: ${res.error || 'Saved locally; database sync failed.'}`);
       } else {
+        if (res.questions && res.questions.length > 0) {
+          const normalized = ensureQuestionsStartWithQ1(res.questions);
+          setQuestions(normalized);
+          localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+        }
         setDbSyncStatus('synced');
-        setDbStatusToast('✓ Authoritative draft version saved to Supabase (public.questionnaires & questionnaire_versions)!');
+        setDbStatusToast('✓ Authoritative questions & options saved to Supabase (public.questions & question_options)!');
       }
     } else if (selectedProject?.id && UUID_REGEX.test(selectedProject.id) && currentUser?.role !== 'enumerator') {
       setIsCreateModalOpen(true);

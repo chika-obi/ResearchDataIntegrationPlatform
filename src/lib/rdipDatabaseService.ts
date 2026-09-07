@@ -6,6 +6,7 @@ import {
   DbQuestionnaire,
   DbQuestionnaireVersion,
   DbQuestion,
+  DbQuestionOption,
   DbVariable,
   DbQuestionnaireAssignment,
   DbResponse,
@@ -16,6 +17,10 @@ import {
   Project,
   ProjectStatus,
   Question,
+  QuestionOption,
+  QuestionType,
+  DataType,
+  MeasurementLevel,
 } from '../types';
 
 /**
@@ -466,11 +471,115 @@ export interface CreateQuestionnaireResult {
   data: {
     questionnaire: DbQuestionnaire;
     version: DbQuestionnaireVersion;
+    questions?: Question[];
   } | null;
   error: string | null;
   errorCode?: string | null;
   errorDetails?: string | null;
   parsedError?: FormattedSupabaseError;
+}
+
+/**
+ * Phase 6: Standard UUID validator
+ */
+export const isStandardUuid = (val?: string | null): boolean => {
+  if (!val || typeof val !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
+};
+
+/**
+ * Phase 6: Sanitize question attributes to match Supabase schema constraints
+ */
+export function sanitizeQuestionFields(q: Question, idx: number) {
+  const validTypes = [
+    'multiple-choice',
+    'checkboxes',
+    'short-text',
+    'paragraph',
+    'likert',
+    'matrix',
+    'dropdown',
+    'date-time',
+    'number',
+    'geolocation',
+    'gps-coordinate',
+  ];
+  let qType = q.type;
+  if (!validTypes.includes(qType)) {
+    qType = 'short-text' as any;
+  }
+
+  const validDataTypes = ['Categorical', 'Numerical', 'Ordinal', 'Continuous'];
+  let dType = q.dataType || 'Categorical';
+  if (!validDataTypes.includes(dType)) dType = 'Categorical';
+
+  const validLevels = ['Nominal', 'Ordinal', 'Interval', 'Ratio'];
+  let mLevel = q.measurementLevel || 'Nominal';
+  if (!validLevels.includes(mLevel)) mLevel = 'Nominal';
+
+  return {
+    question_number: q.number || `Q${idx + 1}`,
+    section: q.section || 'Section A',
+    question_text: q.title || `Question ${idx + 1}`,
+    help_text: q.helpText || null,
+    variable_name: q.variableName || `VAR_${idx + 1}`,
+    variable_label: q.variableLabel || q.title || null,
+    question_type: qType,
+    data_type: dType,
+    measurement_level: mLevel,
+    required: q.required ?? true,
+    has_other_option: Boolean(q.hasOtherOption),
+    likert_scale: q.likertScale ? Number(q.likertScale) : null,
+    linked_research_objective: q.linkedObjective || null,
+    validation_rules: q.validationRules || {},
+    conditional_logic: q.logicRule || {},
+    gps_config: q.gpsConfig || {},
+    display_order: idx + 1,
+  };
+}
+
+/**
+ * Phase 6: Convert authoritative database question row and options to frontend Question
+ */
+export function mapDbQuestionToQuestion(dbQ: any): Question {
+  const rawOptions = Array.isArray(dbQ.options) ? dbQ.options : [];
+  const sortedOptions = [...rawOptions].sort(
+    (a, b) => (a.display_order ?? 0) - (b.display_order ?? 0)
+  );
+
+  return {
+    id: dbQ.id,
+    number: dbQ.question_number,
+    section: dbQ.section || undefined,
+    title: dbQ.question_text,
+    helpText: dbQ.help_text || undefined,
+    variableName: dbQ.variable_name,
+    variableLabel: dbQ.variable_label || undefined,
+    type: dbQ.question_type as QuestionType,
+    required: Boolean(dbQ.required),
+    hasOtherOption: Boolean(dbQ.has_other_option),
+    likertScale: dbQ.likert_scale != null ? Number(dbQ.likert_scale) : undefined,
+    linkedObjective: dbQ.linked_research_objective || undefined,
+    dataType: dbQ.data_type,
+    measurementLevel: dbQ.measurement_level,
+    validationRules:
+      dbQ.validation_rules && Object.keys(dbQ.validation_rules).length > 0
+        ? dbQ.validation_rules
+        : undefined,
+    logicRule:
+      dbQ.conditional_logic && Object.keys(dbQ.conditional_logic).length > 0
+        ? dbQ.conditional_logic
+        : undefined,
+    gpsConfig:
+      dbQ.gps_config && Object.keys(dbQ.gps_config).length > 0
+        ? dbQ.gps_config
+        : undefined,
+    options: sortedOptions.map((opt: any) => ({
+      id: opt.id,
+      label: opt.option_label,
+      numericCode: opt.numeric_code != null ? Number(opt.numeric_code) : undefined,
+    })),
+  };
 }
 
 export async function fetchProjectQuestionnaires(projectId: string): Promise<{
@@ -684,6 +793,30 @@ export async function createQuestionnaireInDb(
     const newVersionId = crypto.randomUUID();
     const versionNumber = params.version_number || 'v1.0';
 
+    // Ensure all questions and options have stable, valid UUIDs
+    const preparedQuestions: Question[] = (params.questions || []).map((q, idx) => {
+      const qCopy = { ...q };
+      if (!isStandardUuid(qCopy.id)) {
+        qCopy.id = crypto.randomUUID();
+      }
+      if (!qCopy.number) {
+        qCopy.number = `Q${idx + 1}`;
+      }
+      if (qCopy.options && Array.isArray(qCopy.options)) {
+        qCopy.options = qCopy.options.map((opt, optIdx) => {
+          const optCopy = { ...opt };
+          if (!isStandardUuid(optCopy.id)) {
+            optCopy.id = crypto.randomUUID();
+          }
+          if (optCopy.numericCode === undefined) {
+            optCopy.numericCode = optIdx + 1;
+          }
+          return optCopy;
+        });
+      }
+      return qCopy;
+    });
+
     // 6. Schema definition for initial draft version
     const schemaDefinition = {
       sections: [
@@ -694,7 +827,7 @@ export async function createQuestionnaireInDb(
         },
       ],
       style: params.metadata?.style || 'academic',
-      questions: params.questions || [],
+      questions: preparedQuestions,
       created_at: new Date().toISOString(),
     };
 
@@ -772,82 +905,63 @@ export async function createQuestionnaireInDb(
       console.debug('[RDIP DB] Note linking current_version_id:', updErr);
     }
 
-    // 10. Populate relational question rows if questions are provided
-    if (params.questions && params.questions.length > 0) {
+    // 10. Populate relational question rows in public.questions and public.question_options
+    if (preparedQuestions.length > 0) {
       try {
-        const validTypes = [
-          'multiple-choice',
-          'checkboxes',
-          'short-text',
-          'paragraph',
-          'likert',
-          'matrix',
-          'dropdown',
-          'date-time',
-          'number',
-          'geolocation',
-          'gps-coordinate',
-        ];
+        for (let idx = 0; idx < preparedQuestions.length; idx++) {
+          const q = preparedQuestions[idx];
+          const fields = sanitizeQuestionFields(q, idx);
 
-        for (let idx = 0; idx < params.questions.length; idx++) {
-          const q = params.questions[idx];
-          const questionDbId = crypto.randomUUID();
-
-          let qType = q.type;
-          if (!validTypes.includes(qType)) {
-            qType = 'short-text' as any;
-          }
-
-          let dType = q.dataType || 'Categorical';
-          const validDataTypes = ['Categorical', 'Numerical', 'Ordinal', 'Continuous'];
-          if (!validDataTypes.includes(dType)) dType = 'Categorical';
-
-          let mLevel = q.measurementLevel || 'Nominal';
-          const validLevels = ['Nominal', 'Ordinal', 'Interval', 'Ratio'];
-          if (!validLevels.includes(mLevel)) mLevel = 'Nominal';
-
-          await supabase.from('questions').insert([
+          const { error: qInsertErr } = await supabase.from('questions').insert([
             {
-              id: questionDbId,
+              id: q.id,
               questionnaire_version_id: newVersionId,
-              question_number: q.number || `Q${idx + 1}`,
-              section: q.section || params.metadata?.section || 'Section A',
-              question_text: q.title || `Question ${idx + 1}`,
-              help_text: q.helpText || null,
-              variable_name: q.variableName || `VAR_${idx + 1}`,
-              variable_label: q.variableLabel || q.title,
-              question_type: qType,
-              data_type: dType,
-              measurement_level: mLevel,
-              required: q.required ?? true,
-              has_other_option: Boolean(q.hasOtherOption),
-              likert_scale: q.likertScale ? Number(q.likertScale) : null,
-              linked_research_objective: q.linkedObjective || null,
-              validation_rules: q.validationRules || {},
-              conditional_logic: q.logicRule || {},
-              gps_config: q.gpsConfig || {},
-              display_order: idx + 1,
+              ...fields,
             },
           ]);
+
+          if (qInsertErr) {
+            console.error(`[RDIP DB] Error inserting question ${q.id}:`, qInsertErr);
+          }
 
           if (q.options && q.options.length > 0) {
             for (let optIdx = 0; optIdx < q.options.length; optIdx++) {
               const opt = q.options[optIdx];
-              await supabase.from('question_options').insert([
+              const { error: optErr } = await supabase.from('question_options').insert([
                 {
-                  id: crypto.randomUUID(),
-                  question_id: questionDbId,
+                  id: opt.id,
+                  question_id: q.id,
                   option_label: opt.label || `Option ${optIdx + 1}`,
                   option_value: opt.id || `opt_${optIdx + 1}`,
                   numeric_code: typeof opt.numericCode === 'number' ? opt.numericCode : optIdx + 1,
                   display_order: optIdx + 1,
+                  metadata: {},
                 },
               ]);
+              if (optErr) {
+                console.error(`[RDIP DB] Error inserting question option ${opt.id}:`, optErr);
+              }
             }
           }
         }
       } catch (questionsPopulateErr) {
         console.warn('[RDIP DB] Question row population note:', questionsPopulateErr);
+      }
+    }
+
+    // Sync back to params.questions in-place
+    if (params.questions) {
+      for (let i = 0; i < params.questions.length; i++) {
+        if (preparedQuestions[i]) {
+          params.questions[i].id = preparedQuestions[i].id;
+          if (params.questions[i].options && preparedQuestions[i].options) {
+            for (let j = 0; j < (params.questions[i].options?.length || 0); j++) {
+              if (preparedQuestions[i].options![j]) {
+                params.questions[i].options![j].id = preparedQuestions[i].options![j].id;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -915,6 +1029,7 @@ export async function createQuestionnaireInDb(
       data: {
         questionnaire: finalQuestionnaire,
         version: finalVersion,
+        questions: preparedQuestions,
       },
       error: null,
     };
@@ -934,6 +1049,7 @@ export async function createQuestionnaireInDb(
 /**
  * Save draft edits to an existing questionnaire version in Supabase.
  * Respects version immutability: published versions cannot be mutated.
+ * Authoritatively syncs public.questions and public.question_options with relational upsert/delete.
  */
 export async function saveQuestionnaireDraftInDb(params: {
   questionnaire_id: string;
@@ -942,7 +1058,7 @@ export async function saveQuestionnaireDraftInDb(params: {
   description?: string;
   questions: Question[];
   metadata?: Record<string, any>;
-}): Promise<{ success: boolean; error?: string }> {
+}): Promise<{ success: boolean; questions?: Question[]; error?: string }> {
   try {
     const { data: authData } = await supabase.auth.getUser();
     if (!authData?.user) {
@@ -965,7 +1081,7 @@ export async function saveQuestionnaireDraftInDb(params: {
         .eq('id', params.questionnaire_id);
     }
 
-    // 2. Identify draft version
+    // 2. Identify target version
     let targetVersionId = params.version_id;
     if (!targetVersionId) {
       const { data: q } = await supabase
@@ -976,43 +1092,356 @@ export async function saveQuestionnaireDraftInDb(params: {
       targetVersionId = q?.current_version_id || null;
     }
 
-    if (targetVersionId) {
-      const { data: ver } = await supabase
-        .from('questionnaire_versions')
-        .select('status, schema_definition')
-        .eq('id', targetVersionId)
-        .maybeSingle();
+    if (!targetVersionId) {
+      return { success: false, error: 'No questionnaire version found to save draft.' };
+    }
 
-      if (ver && ver.status !== 'draft') {
-        return {
-          success: false,
-          error: `Cannot update version: current status is '${ver.status}'. Published versions are immutable. Please create a new draft version.`,
-        };
+    const { data: ver, error: verFetchErr } = await supabase
+      .from('questionnaire_versions')
+      .select('id, status, schema_definition')
+      .eq('id', targetVersionId)
+      .maybeSingle();
+
+    if (verFetchErr || !ver) {
+      return {
+        success: false,
+        error: verFetchErr?.message || 'Questionnaire version not found in database.',
+      };
+    }
+
+    if (ver.status !== 'draft') {
+      return {
+        success: false,
+        error: `Cannot update version: current status is '${ver.status}'. Published versions are immutable. Please create a new draft version.`,
+      };
+    }
+
+    // 3. Prepare questions and options with stable UUIDs
+    const preparedQuestions: Question[] = (params.questions || []).map((q, idx) => {
+      const qCopy = { ...q };
+      if (!isStandardUuid(qCopy.id)) {
+        qCopy.id = crypto.randomUUID();
+      }
+      if (!qCopy.number) {
+        qCopy.number = `Q${idx + 1}`;
+      }
+      if (qCopy.options && Array.isArray(qCopy.options)) {
+        qCopy.options = qCopy.options.map((opt, optIdx) => {
+          const optCopy = { ...opt };
+          if (!isStandardUuid(optCopy.id)) {
+            optCopy.id = crypto.randomUUID();
+          }
+          if (optCopy.numericCode === undefined) {
+            optCopy.numericCode = optIdx + 1;
+          }
+          return optCopy;
+        });
+      }
+      return qCopy;
+    });
+
+    // 4. Fetch existing questions and options for this version
+    const { data: existingQRows, error: fetchQErr } = await supabase
+      .from('questions')
+      .select('id, options:question_options(id)')
+      .eq('questionnaire_version_id', targetVersionId);
+
+    if (fetchQErr) {
+      console.warn('[RDIP DB] Error fetching existing questions for diff:', fetchQErr);
+    }
+
+    const existingQuestionMap = new Map<string, Set<string>>();
+    if (existingQRows && Array.isArray(existingQRows)) {
+      for (const row of existingQRows) {
+        const optIds = new Set<string>();
+        if (row.options && Array.isArray(row.options)) {
+          for (const o of row.options) {
+            if (o.id) optIds.add(o.id);
+          }
+        }
+        existingQuestionMap.set(row.id, optIds);
+      }
+    }
+
+    // 5. Delete removed questions from public.questions (cascade will remove question_options)
+    const activeQuestionIds = new Set(preparedQuestions.map((q) => q.id));
+    for (const [existingQId] of existingQuestionMap) {
+      if (!activeQuestionIds.has(existingQId)) {
+        const { error: delErr } = await supabase
+          .from('questions')
+          .delete()
+          .eq('id', existingQId);
+        if (delErr) {
+          console.error(`[RDIP DB] Failed to delete removed question ${existingQId}:`, delErr);
+        }
+      }
+    }
+
+    // 6. Upsert current questions and options
+    for (let idx = 0; idx < preparedQuestions.length; idx++) {
+      const q = preparedQuestions[idx];
+      const fields = sanitizeQuestionFields(q, idx);
+
+      if (existingQuestionMap.has(q.id)) {
+        // Update existing question
+        const { error: updErr } = await supabase
+          .from('questions')
+          .update({
+            ...fields,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', q.id);
+
+        if (updErr) {
+          console.error(`[RDIP DB] Failed to update question ${q.id}:`, updErr);
+        }
+      } else {
+        // Insert new question
+        const { error: insErr } = await supabase.from('questions').insert([
+          {
+            id: q.id,
+            questionnaire_version_id: targetVersionId,
+            ...fields,
+          },
+        ]);
+
+        if (insErr) {
+          console.error(`[RDIP DB] Failed to insert question ${q.id}:`, insErr);
+        }
       }
 
-      const updatedSchema = {
-        ...(ver?.schema_definition || {}),
-        questions: params.questions,
-        last_saved_at: new Date().toISOString(),
-      };
+      // Handle options synchronization for this question
+      const existingOptIds = existingQuestionMap.get(q.id) || new Set<string>();
+      const currentOptIds = new Set((q.options || []).map((o) => o.id));
 
-      const { error: verUpdateErr } = await supabase
-        .from('questionnaire_versions')
-        .update({
-          schema_definition: updatedSchema,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', targetVersionId);
+      // Delete removed options
+      for (const optId of existingOptIds) {
+        if (!currentOptIds.has(optId)) {
+          const { error: delOptErr } = await supabase
+            .from('question_options')
+            .delete()
+            .eq('id', optId);
+          if (delOptErr) {
+            console.error(`[RDIP DB] Failed to delete removed option ${optId}:`, delOptErr);
+          }
+        }
+      }
 
-      if (verUpdateErr) {
-        return { success: false, error: verUpdateErr.message };
+      // Upsert current options
+      if (q.options && q.options.length > 0) {
+        for (let optIdx = 0; optIdx < q.options.length; optIdx++) {
+          const opt = q.options[optIdx];
+          const optPayload = {
+            id: opt.id,
+            question_id: q.id,
+            option_label: opt.label || `Option ${optIdx + 1}`,
+            option_value: opt.id || `opt_${optIdx + 1}`,
+            numeric_code: typeof opt.numericCode === 'number' ? opt.numericCode : optIdx + 1,
+            display_order: optIdx + 1,
+            metadata: {},
+          };
+
+          if (existingOptIds.has(opt.id)) {
+            const { error: updOptErr } = await supabase
+              .from('question_options')
+              .update(optPayload)
+              .eq('id', opt.id);
+            if (updOptErr) {
+              console.error(`[RDIP DB] Failed to update option ${opt.id}:`, updOptErr);
+            }
+          } else {
+            const { error: insOptErr } = await supabase
+              .from('question_options')
+              .insert([optPayload]);
+            if (insOptErr) {
+              console.error(`[RDIP DB] Failed to insert option ${opt.id}:`, insOptErr);
+            }
+          }
+        }
+      }
+    }
+
+    // 7. Keep schema_definition synchronized for backwards compatibility
+    const updatedSchema = {
+      ...(ver.schema_definition || {}),
+      questions: preparedQuestions,
+      last_saved_at: new Date().toISOString(),
+    };
+
+    const { error: verUpdateErr } = await supabase
+      .from('questionnaire_versions')
+      .update({
+        schema_definition: updatedSchema,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', targetVersionId);
+
+    if (verUpdateErr) {
+      console.warn('[RDIP DB] schema_definition update note:', verUpdateErr.message);
+    }
+
+    // 8. Update caller's questions in-place so local state retains newly assigned UUIDs
+    if (params.questions) {
+      for (let i = 0; i < params.questions.length; i++) {
+        if (preparedQuestions[i]) {
+          params.questions[i].id = preparedQuestions[i].id;
+          if (params.questions[i].options && preparedQuestions[i].options) {
+            for (let j = 0; j < (params.questions[i].options?.length || 0); j++) {
+              if (preparedQuestions[i].options![j]) {
+                params.questions[i].options![j].id = preparedQuestions[i].options![j].id;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return { success: true, questions: preparedQuestions };
+  } catch (err: any) {
+    console.error('[RDIP DB] saveQuestionnaireDraftInDb error:', err);
+    return { success: false, error: err?.message || 'Failed to save questionnaire draft.' };
+  }
+}
+
+/**
+ * Phase 6: Granular single question creation in Supabase
+ */
+export async function createQuestionInDb(params: {
+  version_id: string;
+  question: Question;
+  display_order?: number;
+}): Promise<{ success: boolean; question?: Question; error?: string }> {
+  try {
+    const qCopy = { ...params.question };
+    if (!isStandardUuid(qCopy.id)) qCopy.id = crypto.randomUUID();
+
+    const fields = sanitizeQuestionFields(qCopy, (params.display_order ?? 1) - 1);
+    const { error: qErr } = await supabase.from('questions').insert([
+      {
+        id: qCopy.id,
+        questionnaire_version_id: params.version_id,
+        ...fields,
+      },
+    ]);
+
+    if (qErr) {
+      return { success: false, error: qErr.message };
+    }
+
+    if (qCopy.options && qCopy.options.length > 0) {
+      for (let i = 0; i < qCopy.options.length; i++) {
+        const opt = qCopy.options[i];
+        if (!isStandardUuid(opt.id)) opt.id = crypto.randomUUID();
+        await supabase.from('question_options').insert([
+          {
+            id: opt.id,
+            question_id: qCopy.id,
+            option_label: opt.label || `Option ${i + 1}`,
+            option_value: opt.id,
+            numeric_code: opt.numericCode ?? i + 1,
+            display_order: i + 1,
+            metadata: {},
+          },
+        ]);
+      }
+    }
+
+    return { success: true, question: qCopy };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to create question in DB.' };
+  }
+}
+
+/**
+ * Phase 6: Granular single question update in Supabase
+ */
+export async function updateQuestionInDb(params: {
+  question_id: string;
+  updates: Partial<Question>;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const dbUpdates: any = { updated_at: new Date().toISOString() };
+    if (params.updates.title !== undefined) dbUpdates.question_text = params.updates.title;
+    if (params.updates.number !== undefined) dbUpdates.question_number = params.updates.number;
+    if (params.updates.section !== undefined) dbUpdates.section = params.updates.section;
+    if (params.updates.helpText !== undefined) dbUpdates.help_text = params.updates.helpText;
+    if (params.updates.variableName !== undefined) dbUpdates.variable_name = params.updates.variableName;
+    if (params.updates.variableLabel !== undefined) dbUpdates.variable_label = params.updates.variableLabel;
+    if (params.updates.type !== undefined) dbUpdates.question_type = params.updates.type;
+    if (params.updates.required !== undefined) dbUpdates.required = params.updates.required;
+    if (params.updates.hasOtherOption !== undefined) dbUpdates.has_other_option = params.updates.hasOtherOption;
+    if (params.updates.likertScale !== undefined) dbUpdates.likert_scale = params.updates.likertScale;
+    if (params.updates.linkedObjective !== undefined) dbUpdates.linked_research_objective = params.updates.linkedObjective;
+    if (params.updates.dataType !== undefined) dbUpdates.data_type = params.updates.dataType;
+    if (params.updates.measurementLevel !== undefined) dbUpdates.measurement_level = params.updates.measurementLevel;
+    if (params.updates.validationRules !== undefined) dbUpdates.validation_rules = params.updates.validationRules;
+    if (params.updates.logicRule !== undefined) dbUpdates.conditional_logic = params.updates.logicRule;
+    if (params.updates.gpsConfig !== undefined) dbUpdates.gps_config = params.updates.gpsConfig;
+
+    const { error } = await supabase
+      .from('questions')
+      .update(dbUpdates)
+      .eq('id', params.question_id);
+
+    if (error) return { success: false, error: error.message };
+
+    // If options are provided, sync options
+    if (params.updates.options !== undefined && Array.isArray(params.updates.options)) {
+      const { data: existingOpts } = await supabase
+        .from('question_options')
+        .select('id')
+        .eq('question_id', params.question_id);
+
+      const existingOptIds = new Set((existingOpts || []).map((o) => o.id));
+      const currentOptIds = new Set(params.updates.options.map((o) => o.id));
+
+      for (const optId of existingOptIds) {
+        if (!currentOptIds.has(optId)) {
+          await supabase.from('question_options').delete().eq('id', optId);
+        }
+      }
+
+      for (let i = 0; i < params.updates.options.length; i++) {
+        const opt = params.updates.options[i];
+        if (!isStandardUuid(opt.id)) opt.id = crypto.randomUUID();
+
+        const optPayload = {
+          id: opt.id,
+          question_id: params.question_id,
+          option_label: opt.label || `Option ${i + 1}`,
+          option_value: opt.id,
+          numeric_code: opt.numericCode ?? i + 1,
+          display_order: i + 1,
+          metadata: {},
+        };
+
+        if (existingOptIds.has(opt.id)) {
+          await supabase.from('question_options').update(optPayload).eq('id', opt.id);
+        } else {
+          await supabase.from('question_options').insert([optPayload]);
+        }
       }
     }
 
     return { success: true };
   } catch (err: any) {
-    console.error('[RDIP DB] saveQuestionnaireDraftInDb error:', err);
-    return { success: false, error: err?.message || 'Failed to save questionnaire draft.' };
+    return { success: false, error: err?.message || 'Failed to update question in DB.' };
+  }
+}
+
+/**
+ * Phase 6: Granular question deletion in Supabase (cascades to options)
+ */
+export async function deleteQuestionInDb(questionId: string): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  try {
+    const { error } = await supabase.from('questions').delete().eq('id', questionId);
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to delete question from DB.' };
   }
 }
 
@@ -1129,7 +1558,23 @@ export async function fetchQuestionnaireVersionById(versionId: string): Promise<
       };
     }
 
-    // Check schema_definition.questions first
+    // Phase 6: Query relational questions and options tables authoritatively
+    const { data: qRows, error: qErr } = await supabase
+      .from('questions')
+      .select('*, options:question_options(*)')
+      .eq('questionnaire_version_id', versionId)
+      .order('display_order', { ascending: true });
+
+    if (!qErr && qRows && qRows.length > 0) {
+      const mappedQuestions = qRows.map(mapDbQuestionToQuestion);
+      return {
+        version: version as DbQuestionnaireVersion,
+        questions: mappedQuestions,
+        error: null,
+      };
+    }
+
+    // Fallback to schema_definition.questions if no relational rows exist (e.g. legacy records)
     if (
       version.schema_definition?.questions &&
       Array.isArray(version.schema_definition.questions) &&
@@ -1142,50 +1587,9 @@ export async function fetchQuestionnaireVersionById(versionId: string): Promise<
       };
     }
 
-    // Fallback to relational questions table
-    const { data: qRows, error: qErr } = await supabase
-      .from('questions')
-      .select('*, options:question_options(*)')
-      .eq('questionnaire_version_id', versionId)
-      .order('display_order', { ascending: true });
-
-    if (qErr || !qRows || qRows.length === 0) {
-      return {
-        version: version as DbQuestionnaireVersion,
-        questions: [],
-        error: null,
-      };
-    }
-
-    // Convert relational DbQuestion to Question
-    const mappedQuestions: Question[] = qRows.map((q: any) => ({
-      id: q.id,
-      number: q.question_number,
-      section: q.section || undefined,
-      title: q.question_text,
-      helpText: q.help_text || undefined,
-      variableName: q.variable_name,
-      variableLabel: q.variable_label || undefined,
-      type: q.question_type,
-      required: Boolean(q.required),
-      hasOtherOption: Boolean(q.has_other_option),
-      likertScale: q.likert_scale || undefined,
-      linkedObjective: q.linked_research_objective || undefined,
-      dataType: q.data_type,
-      measurementLevel: q.measurement_level,
-      validationRules: q.validation_rules || {},
-      logicRule: q.conditional_logic || undefined,
-      gpsConfig: q.gps_config || undefined,
-      options: (q.options || []).map((opt: any) => ({
-        id: opt.id,
-        label: opt.option_label,
-        numericCode: opt.numeric_code,
-      })),
-    }));
-
     return {
       version: version as DbQuestionnaireVersion,
-      questions: mappedQuestions,
+      questions: [],
       error: null,
     };
   } catch (err: any) {
@@ -1365,27 +1769,54 @@ export async function createQuestionnaireVersionInDb(
         const sourceVer = versionList.find((v) => v.id === sourceVerId);
         if (sourceVer) {
           sourceVerNumber = sourceVer.version_number;
-          if (
-            sourceVer.schema_definition?.questions &&
-            Array.isArray(sourceVer.schema_definition.questions)
-          ) {
-            sourceQuestions = sourceVer.schema_definition.questions;
-          }
+        }
+
+        // Authoritatively query public.questions joined with question_options
+        const { data: srcQRows, error: srcQErr } = await supabase
+          .from('questions')
+          .select('*, options:question_options(*)')
+          .eq('questionnaire_version_id', sourceVerId)
+          .order('display_order', { ascending: true });
+
+        if (!srcQErr && srcQRows && srcQRows.length > 0) {
+          sourceQuestions = srcQRows.map(mapDbQuestionToQuestion);
+        } else if (
+          sourceVer?.schema_definition?.questions &&
+          Array.isArray(sourceVer.schema_definition.questions)
+        ) {
+          sourceQuestions = sourceVer.schema_definition.questions;
         }
       }
     }
 
-    // Deep clone questions with new independent IDs to enforce strict version independence
-    const clonedQuestions: Question[] = sourceQuestions.map((q, qIdx) => ({
-      ...JSON.parse(JSON.stringify(q)),
-      id: `q-${Date.now().toString().slice(-4)}-${qIdx + 1}`,
-      options: q.options
-        ? q.options.map((opt, optIdx) => ({
-            ...JSON.parse(JSON.stringify(opt)),
-            id: `opt-${Date.now().toString().slice(-4)}-${qIdx + 1}-${optIdx + 1}`,
-          }))
-        : undefined,
-    }));
+    // Deep clone questions with new independent UUIDs to enforce strict version independence
+    const idMap = new Map<string, string>();
+    const clonedQuestions: Question[] = sourceQuestions.map((q) => {
+      const newQId = crypto.randomUUID();
+      if (q.id) idMap.set(q.id, newQId);
+      return {
+        ...JSON.parse(JSON.stringify(q)),
+        id: newQId,
+        options: q.options
+          ? q.options.map((opt, optIdx) => ({
+              ...JSON.parse(JSON.stringify(opt)),
+              id: crypto.randomUUID(),
+              numericCode: opt.numericCode ?? optIdx + 1,
+            }))
+          : undefined,
+      };
+    });
+
+    // Update targetQuestionId in logic rules to reference cloned questions
+    for (const q of clonedQuestions) {
+      if (q.logicRule?.branches) {
+        for (const branch of q.logicRule.branches) {
+          if (branch.targetQuestionId && idMap.has(branch.targetQuestionId)) {
+            branch.targetQuestionId = idMap.get(branch.targetQuestionId)!;
+          }
+        }
+      }
+    }
 
     // 6. Insert new version record in public.questionnaire_versions
     const newVersionId = crypto.randomUUID();
@@ -1430,70 +1861,42 @@ export async function createQuestionnaireVersionInDb(
       };
     }
 
-    // 7. Populate relational questions and options for this version
+    // 7. Populate relational questions and options for this version in public.questions & question_options
     if (clonedQuestions.length > 0) {
       try {
-        const validTypes = [
-          'multiple-choice',
-          'checkboxes',
-          'short-text',
-          'paragraph',
-          'likert',
-          'matrix',
-          'dropdown',
-          'date-time',
-          'number',
-          'geolocation',
-          'gps-coordinate',
-        ];
-
         for (let idx = 0; idx < clonedQuestions.length; idx++) {
           const q = clonedQuestions[idx];
-          const questionDbId = crypto.randomUUID();
+          const fields = sanitizeQuestionFields(q, idx);
 
-          let qType = q.type;
-          if (!validTypes.includes(qType)) qType = 'short-text' as any;
-
-          let dType = q.dataType || 'Categorical';
-          let mLevel = q.measurementLevel || 'Nominal';
-
-          await supabase.from('questions').insert([
+          const { error: qErr } = await supabase.from('questions').insert([
             {
-              id: questionDbId,
+              id: q.id,
               questionnaire_version_id: newVersionId,
-              question_number: q.number || `Q${idx + 1}`,
-              section: q.section || 'Section A',
-              question_text: q.title || `Question ${idx + 1}`,
-              help_text: q.helpText || null,
-              variable_name: q.variableName || `VAR_${idx + 1}`,
-              variable_label: q.variableLabel || q.title,
-              question_type: qType,
-              data_type: dType,
-              measurement_level: mLevel,
-              required: q.required ?? true,
-              has_other_option: Boolean(q.hasOtherOption),
-              likert_scale: q.likertScale ? Number(q.likertScale) : null,
-              linked_research_objective: q.linkedObjective || null,
-              validation_rules: q.validationRules || {},
-              conditional_logic: q.logicRule || {},
-              gps_config: q.gpsConfig || {},
-              display_order: idx + 1,
+              ...fields,
             },
           ]);
+
+          if (qErr) {
+            console.error(`[RDIP DB] Error inserting cloned question ${q.id}:`, qErr);
+          }
 
           if (q.options && q.options.length > 0) {
             for (let optIdx = 0; optIdx < q.options.length; optIdx++) {
               const opt = q.options[optIdx];
-              await supabase.from('question_options').insert([
+              const { error: optErr } = await supabase.from('question_options').insert([
                 {
-                  id: crypto.randomUUID(),
-                  question_id: questionDbId,
+                  id: opt.id,
+                  question_id: q.id,
                   option_label: opt.label || `Option ${optIdx + 1}`,
                   option_value: opt.id || `opt_${optIdx + 1}`,
                   numeric_code: typeof opt.numericCode === 'number' ? opt.numericCode : optIdx + 1,
                   display_order: optIdx + 1,
+                  metadata: {},
                 },
               ]);
+              if (optErr) {
+                console.error(`[RDIP DB] Error inserting cloned question option ${opt.id}:`, optErr);
+              }
             }
           }
         }

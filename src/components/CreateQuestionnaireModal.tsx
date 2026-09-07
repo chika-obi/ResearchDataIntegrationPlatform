@@ -24,6 +24,7 @@ interface CreateQuestionnaireModalProps {
     warning?: string;
     questionnaire?: DbQuestionnaire;
     version?: DbQuestionnaireVersion;
+    questions?: Question[];
   }>;
 }
 
