@@ -24,6 +24,7 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [messageToast, setMessageToast] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [generatedCredentials, setGeneratedCredentials] = useState<{ name: string; email: string; password: string } | null>(null);
 
   // New Assign Form State
   const [newName, setNewName] = useState('');
@@ -155,6 +156,13 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
 
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to register enumerator.');
+      if (payload.temporaryPassword) {
+        setGeneratedCredentials({
+          name: newName.trim(),
+          email: newEmail.trim().toLowerCase(),
+          password: payload.temporaryPassword,
+        });
+      }
 
       const defaultCoords = {
         'North District': { latitude: 10.5105, longitude: 7.4165, lga: 'Kaduna North', state: 'Kaduna' },
@@ -842,5 +850,40 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
         </div>
       )}
     </div>
+
+      {generatedCredentials && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-[#002045]/50 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-[#c4c6cf]/60 overflow-hidden">
+            <div className="bg-[#1a365d] text-white p-5">
+              <h3 className="text-lg font-bold">Enumerator Login Credentials</h3>
+              <p className="text-xs text-white/80 mt-1">Give these credentials securely to the enumerator.</p>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <p className="text-xs font-bold text-[#74777f]">Enumerator</p>
+                <p className="text-sm font-semibold text-[#002045]">{generatedCredentials.name}</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-[#74777f]">Login email</p>
+                <p className="text-sm font-semibold text-[#002045] break-all">{generatedCredentials.email}</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-[#74777f]">Temporary password</p>
+                <div className="mt-1 p-3 rounded-lg bg-[#f1f3ff] border border-[#c4c6cf] font-mono text-sm font-bold text-[#002045] select-all break-all">
+                  {generatedCredentials.password}
+                </div>
+              </div>
+              <p className="text-xs text-[#43474e] leading-relaxed">This password is temporary. The enumerator should change it after signing in.</p>
+              <button
+                type="button"
+                onClick={() => setGeneratedCredentials(null)}
+                className="w-full py-2.5 rounded-lg bg-[#006a68] hover:bg-[#004f4e] text-white text-sm font-bold"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
   );
 };
