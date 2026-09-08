@@ -13,13 +13,34 @@ export const PasswordRecoveryGate: React.FC = () => {
     let mounted = true;
 
     const initialise = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (mounted) {
-        setReady(!!data.session);
-        if (!data.session) {
+      try {
+        // PKCE recovery links may arrive with ?code=... and require an explicit exchange.
+        const query = new URLSearchParams(window.location.search);
+        const code = query.get('code');
+
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          window.history.replaceState({}, document.title, '/reset-password');
+        }
+
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
+        if (!mounted) return;
+
+        if (data.session) {
+          setReady(true);
+          setIsError(false);
+          setMessage(null);
+        } else {
           setIsError(true);
           setMessage('This password recovery link is invalid or has expired. Please request a new password reset link.');
         }
+      } catch (error: any) {
+        if (!mounted) return;
+        setIsError(true);
+        setMessage(error?.message || 'Unable to verify the password recovery link.');
       }
     };
 
@@ -27,10 +48,12 @@ export const PasswordRecoveryGate: React.FC = () => {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
-      if (event === 'PASSWORD_RECOVERY') {
+      if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
         setReady(!!session);
-        setIsError(false);
-        setMessage(null);
+        if (session) {
+          setIsError(false);
+          setMessage(null);
+        }
       }
     });
 
@@ -105,30 +128,12 @@ export const PasswordRecoveryGate: React.FC = () => {
 
               <label className="block">
                 <span className="block text-xs font-bold text-[#002045] mb-1.5">New Password</span>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  className="w-full px-3 py-2.5 rounded-lg border border-[#c4c6cf] focus:outline-none focus:ring-2 focus:ring-[#006a68]/30 focus:border-[#006a68]"
-                  placeholder="Enter new password"
-                />
+                <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" minLength={8} required className="w-full px-3 py-2.5 rounded-lg border border-[#c4c6cf] focus:outline-none focus:ring-2 focus:ring-[#006a68]/30 focus:border-[#006a68]" placeholder="Enter new password" />
               </label>
 
               <label className="block">
                 <span className="block text-xs font-bold text-[#002045] mb-1.5">Confirm New Password</span>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  autoComplete="new-password"
-                  minLength={8}
-                  required
-                  className="w-full px-3 py-2.5 rounded-lg border border-[#c4c6cf] focus:outline-none focus:ring-2 focus:ring-[#006a68]/30 focus:border-[#006a68]"
-                  placeholder="Confirm new password"
-                />
+                <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" minLength={8} required className="w-full px-3 py-2.5 rounded-lg border border-[#c4c6cf] focus:outline-none focus:ring-2 focus:ring-[#006a68]/30 focus:border-[#006a68]" placeholder="Confirm new password" />
               </label>
 
               {message && (
@@ -137,22 +142,14 @@ export const PasswordRecoveryGate: React.FC = () => {
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="w-full py-2.5 rounded-lg bg-[#006a68] hover:bg-[#004f4e] disabled:opacity-60 text-white text-sm font-bold transition-colors"
-              >
+              <button type="submit" disabled={isSaving} className="w-full py-2.5 rounded-lg bg-[#006a68] hover:bg-[#004f4e] disabled:opacity-60 text-white text-sm font-bold transition-colors">
                 {isSaving ? 'Updating Password...' : 'Update Password'}
               </button>
             </form>
           )}
 
           {message && isError && !ready && (
-            <button
-              type="button"
-              onClick={() => window.location.replace(window.location.origin)}
-              className="mt-4 w-full py-2.5 rounded-lg border border-[#c4c6cf] text-[#1a365d] text-sm font-semibold hover:bg-[#f1f3ff]"
-            >
+            <button type="button" onClick={() => window.location.replace(window.location.origin)} className="mt-4 w-full py-2.5 rounded-lg border border-[#c4c6cf] text-[#1a365d] text-sm font-semibold hover:bg-[#f1f3ff]">
               Return to Sign In
             </button>
           )}
