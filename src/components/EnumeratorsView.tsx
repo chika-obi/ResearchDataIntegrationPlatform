@@ -4,6 +4,7 @@ import { INITIAL_ENUMERATORS } from '../data/mockData';
 import { getStoredEnumerators, saveStoredEnumerators } from '../lib/enumeratorTelemetry';
 import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';
 import { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';
+import { supabase } from '../lib/supabase';
 
 interface EnumeratorsViewProps {
   onOpenOfflineCollector: () => void;
@@ -28,6 +29,39 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
   const [newName, setNewName] = useState('');
   const [newRegion, setNewRegion] = useState('North District');
   const [newPhone, setNewPhone] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newProjectId, setNewProjectId] = useState('');
+  const [assignProjects, setAssignProjects] = useState<Array<{ id: string; project_code: string; title: string }>>([]);
+  const [assignProjectsLoading, setAssignProjectsLoading] = useState(false);
+  const [provisioning, setProvisioning] = useState(false);
+  const [provisionError, setProvisionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAssignModalOpen) return;
+    let cancelled = false;
+    const loadAssignProjects = async () => {
+      setAssignProjectsLoading(true);
+      setProvisionError(null);
+      const { data, error } = await supabase
+        .from('projects')
+        .select('id,project_code,title')
+        .neq('status', 'archived')
+        .neq('status', 'completed')
+        .order('created_at', { ascending: false });
+      if (!cancelled) {
+        if (error) {
+          setAssignProjects([]);
+          setProvisionError(`Unable to load research projects: ${error.message}`);
+        } else {
+          setAssignProjects((data || []) as Array<{ id: string; project_code: string; title: string }>);
+          setNewProjectId((current) => current || data?.[0]?.id || '');
+        }
+        setAssignProjectsLoading(false);
+      }
+    };
+    loadAssignProjects();
+    return () => { cancelled = true; };
+  }, [isAssignModalOpen]);
 
   // Synchronize real-time telemetry from OfflineFieldInterface
   useEffect(() => {
@@ -90,59 +124,94 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
     setTimeout(() => setMessageToast(null), 3000);
   };
 
-  const handleAssignSubmit = (e: React.FormEvent) => {
+  const handleAssignSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim()) return;
+    setProvisionError(null);
 
-    // Set default coordinates for region
-    const defaultCoords = {
-      'North District': { latitude: 10.5105, longitude: 7.4165, lga: 'Kaduna North', state: 'Kaduna' },
-      'East District': { latitude: 6.4584, longitude: 7.5464, lga: 'Enugu North', state: 'Enugu' },
-      'South District': { latitude: 4.8156, longitude: 7.0498, lga: 'Port Harcourt', state: 'Rivers' },
-      'West District': { latitude: 7.3775, longitude: 3.9470, lga: 'Ibadan Central', state: 'Oyo' },
-      'Central Metro': { latitude: 9.0765, longitude: 7.3986, lga: 'Abuja Municipal', state: 'FCT Abuja' }
-    }[newRegion] || { latitude: 9.0765, longitude: 7.3986, lga: 'Central Sector', state: 'Federal' };
+    if (!newName.trim() || !newEmail.trim() || !newProjectId) {
+      setProvisionError('Enumerator name, email, and research project are required.');
+      return;
+    }
 
-    const newEnum: Enumerator = {
-      id: `EN-${1050 + enumerators.length + 1}`,
-      name: newName.trim(),
-      region: newRegion,
-      responses: 0,
-      status: 'Synced',
-      unsyncedCount: 0,
-      lastSync: 'Just now',
-      signalStrength: 'Good',
-      batteryLevel: 100,
-      phone: newPhone || '+1 (555) 999-0000',
-      coordinates: {
-        latitude: defaultCoords.latitude,
-        longitude: defaultCoords.longitude,
-        accuracy: 3.5,
-        speed: 1.2,
-        timestamp: new Date().toISOString(),
-        address: `${newRegion} Field Zone`,
-        lga: defaultCoords.lga,
-        state: defaultCoords.state
-      },
-      locationHistory: [
-        {
+    setProvisioning(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error('Authentication error: Please sign in again.');
+
+      const response = await fetch('/api/enumerators', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: newName.trim(),
+          email: newEmail.trim().toLowerCase(),
+          phone: newPhone.trim(),
+          projectId: newProjectId,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to register enumerator.');
+
+      const defaultCoords = {
+        'North District': { latitude: 10.5105, longitude: 7.4165, lga: 'Kaduna North', state: 'Kaduna' },
+        'East District': { latitude: 6.4584, longitude: 7.5464, lga: 'Enugu North', state: 'Enugu' },
+        'South District': { latitude: 4.8156, longitude: 7.0498, lga: 'Port Harcourt', state: 'Rivers' },
+        'West District': { latitude: 7.3775, longitude: 3.9470, lga: 'Ibadan Central', state: 'Oyo' },
+        'Central Metro': { latitude: 9.0765, longitude: 7.3986, lga: 'Abuja Municipal', state: 'FCT Abuja' }
+      }[newRegion] || { latitude: 9.0765, longitude: 7.3986, lga: 'Central Sector', state: 'Federal' };
+
+      const newEnum: Enumerator = {
+        id: `EN-${1050 + enumerators.length + 1}`,
+        name: newName.trim(),
+        region: newRegion,
+        responses: 0,
+        status: 'Synced',
+        unsyncedCount: 0,
+        lastSync: 'Just now',
+        signalStrength: 'Good',
+        batteryLevel: 100,
+        phone: newPhone || '+1 (555) 999-0000',
+        assignedProjectIds: [newProjectId],
+        coordinates: {
           latitude: defaultCoords.latitude,
           longitude: defaultCoords.longitude,
+          accuracy: 3.5,
+          speed: 1.2,
           timestamp: new Date().toISOString(),
-          address: 'Assigned Field Headquarters'
-        }
-      ]
-    };
+          address: `${newRegion} Field Zone`,
+          lga: defaultCoords.lga,
+          state: defaultCoords.state
+        },
+        locationHistory: [
+          {
+            latitude: defaultCoords.latitude,
+            longitude: defaultCoords.longitude,
+            timestamp: new Date().toISOString(),
+            address: 'Assigned Field Headquarters'
+          }
+        ]
+      };
 
-    const updated = [...enumerators, newEnum];
-    setEnumerators(updated);
-    saveStoredEnumerators(updated);
-    setSelectedEnumerator(newEnum);
-    setIsAssignModalOpen(false);
-    setNewName('');
-    setNewPhone('');
-    setMessageToast(`Assigned ${newEnum.name} to ${newRegion}.`);
-    setTimeout(() => setMessageToast(null), 3000);
+      const updated = [...enumerators, newEnum];
+      setEnumerators(updated);
+      saveStoredEnumerators(updated);
+      setSelectedEnumerator(newEnum);
+      setIsAssignModalOpen(false);
+      setNewName('');
+      setNewEmail('');
+      setNewPhone('');
+      setNewProjectId('');
+      setMessageToast(payload.message || `Enumerator ${newEnum.name} registered successfully.`);
+      setTimeout(() => setMessageToast(null), 4000);
+    } catch (error) {
+      setProvisionError(error instanceof Error ? error.message : 'Unable to register enumerator.');
+    } finally {
+      setProvisioning(false);
+    }
   };
 
   return (
@@ -542,6 +611,12 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
             </div>
 
             <form onSubmit={handleAssignSubmit} className="space-y-4 text-xs">
+              {provisionError && (
+                <div role="alert" className="p-3 rounded-lg bg-[#ba1a1a]/10 border border-[#ba1a1a]/20 text-[#8b1515] flex items-start gap-2">
+                  <span className="material-symbols-outlined text-[18px]">error</span>
+                  <span>{provisionError}</span>
+                </div>
+              )}
               <div>
                 <label className="block font-semibold text-[#161c27] mb-1">Enumerator Full Name *</label>
                 <input
@@ -552,6 +627,40 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
                   placeholder="e.g. Samuel K. Vance"
                   className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#161c27] mb-1">Enumerator Email *</label>
+                <input
+                  id="enumerator-email"
+                  name="enumerator-email"
+                  type="email"
+                  required
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  placeholder="enumerator@example.com"
+                  className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#161c27] mb-1">Research Project *</label>
+                <select
+                  id="enumerator-project"
+                  name="enumerator-project"
+                  required
+                  value={newProjectId}
+                  onChange={(e) => setNewProjectId(e.target.value)}
+                  disabled={assignProjectsLoading || provisioning}
+                  className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white"
+                >
+                  <option value="">{assignProjectsLoading ? 'Loading research projects...' : 'Select a research project'}</option>
+                  {assignProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.project_code} — {project.title}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -583,16 +692,18 @@ export const EnumeratorsView: React.FC<EnumeratorsViewProps> = ({ onOpenOfflineC
               <div className="pt-3 border-t border-[#c4c6cf]/40 flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={provisioning}
                   onClick={() => setIsAssignModalOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-[#c4c6cf] font-semibold text-[#002045]"
+                  className="px-4 py-2 rounded-lg border border-[#c4c6cf] font-semibold text-[#002045] disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-lg bg-[#1a365d] text-white font-semibold hover:bg-[#002045]"
+                  disabled={provisioning || assignProjectsLoading}
+                  className="px-5 py-2 rounded-lg bg-[#1a365d] text-white font-semibold hover:bg-[#002045] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Confirm Assignment
+                  {provisioning ? 'Registering...' : 'Confirm Assignment'}
                 </button>
               </div>
             </form>
