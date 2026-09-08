@@ -27,18 +27,48 @@ export const QuestionnaireAssignmentModal: React.FC<Props> = (props) => {
           flex-direction: column;
         }
 
-        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > form,
-        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > .p-6 {
+        /* Keep the assignment form usable on short screens. */
+        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > form {
           min-height: 0;
           overflow-y: auto;
           overscroll-behavior: contain;
           scrollbar-gutter: stable;
+          display: flex;
+          flex-direction: column;
         }
 
+        /* Put validation/error feedback below the form content, not over the header. */
         .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > form > [role="alert"] {
-          position: sticky;
-          top: 0;
-          z-index: 5;
+          order: 10;
+          position: static;
+          z-index: auto;
+          flex-shrink: 0;
+        }
+
+        /* Keep the action buttons at the very bottom after the feedback message. */
+        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > form > div:last-child {
+          order: 20;
+          flex-shrink: 0;
+        }
+
+        /* Success feedback follows the assignment details, immediately before Done. */
+        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > .p-6:not(form) {
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          scrollbar-gutter: stable;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > .p-6:not(form) > div:first-child {
+          order: 10;
+          flex-shrink: 0;
+        }
+
+        .rdip-assignment-modal-layer > .fixed.inset-0 > .relative > .p-6:not(form) > div:last-child {
+          order: 20;
+          flex-shrink: 0;
         }
       `}</style>
       <QuestionnaireAssignmentModalV2 {...props} />
