@@ -81,7 +81,7 @@ export async function POST(request: Request) {
 
     const { data: existingUsers, error: usersError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
     if (usersError) return json({ error: usersError.message }, 500);
-    const existingUser = existingUsers.users.find((u) => (u.email || '').toLowerCase() === email);
+    const existingUser = (existingUsers?.users ?? []).find((u: { id: string; email?: string | null }) => (u.email || '').toLowerCase() === email);
     let enumeratorUserId: string;
 
     if (existingUser) {
