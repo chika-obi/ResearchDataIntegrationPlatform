@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   integrate-phase8:
-    if: contains(github.event.head_commit.message, 'Phase 8') == false
+    if: github.event.head_commit.message != 'fix: database-backed Assign Agent enumerator provisioning'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,28 +24,92 @@ jobs:
           s = p.read_text()
           if 'QuestionnaireAssignmentModal' in s:
               print('Phase 8 UI already integrated')
-              raise SystemExit(0)
+          else:
+              s = s.replace(
+                  "import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';",
+                  "import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';\nimport { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';"
+              )
+              s = s.replace(
+                  "  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);",
+                  "  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);\n  const [isQuestionnaireAssignmentOpen, setIsQuestionnaireAssignmentOpen] = useState(false);"
+              )
+              old = '''          <button\n            onClick={() => setIsAssignModalOpen(true)}\n            className="bg-[#1a365d] hover:bg-[#002045] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">add</span>\n            <span>Assign Agent</span>\n          </button>'''
+              new = '''          <button\n            onClick={() => setIsQuestionnaireAssignmentOpen(true)}\n            className="bg-[#006a68] hover:bg-[#004f4e] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">assignment_turned_in</span>\n            <span>Assign Questionnaire</span>\n          </button>\n\n          <button\n            onClick={() => setIsAssignModalOpen(true)}\n            className="bg-[#1a365d] hover:bg-[#002045] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">add</span>\n            <span>Assign Agent</span>\n          </button>'''
+              if old in s:
+                  s = s.replace(old, new, 1)
+              marker = '      {/* Assign Modal */}'
+              modal = '''      {/* Phase 8: Questionnaire Assignment */}\n      <QuestionnaireAssignmentModal\n        isOpen={isQuestionnaireAssignmentOpen}\n        onClose={() => setIsQuestionnaireAssignmentOpen(false)}\n      />\n\n'''
+              if marker in s and 'isQuestionnaireAssignmentOpen' in s:
+                  s = s.replace(marker, modal + marker, 1)
+              p.write_text(s)
+              print('Phase 8 UI integrated into EnumeratorsView.tsx')
+
+      - name: Connect Assign Agent to database-backed enumerator provisioning
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('src/components/EnumeratorsView.tsx')
+          s = p.read_text()
+
+          if "import { supabase } from '../lib/supabase';" not in s:
+              s = s.replace(
+                  "import { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';",
+                  "import { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';\nimport { supabase } from '../lib/supabase';"
+              )
+
+          if "const [newEmail, setNewEmail]" not in s:
+              s = s.replace(
+                  "  const [newPhone, setNewPhone] = useState('');",
+                  "  const [newPhone, setNewPhone] = useState('');\n  const [newEmail, setNewEmail] = useState('');\n  const [newProjectId, setNewProjectId] = useState('');\n  const [assignProjects, setAssignProjects] = useState<Array<{ id: string; project_code: string; title: string }>>([]);\n  const [assignProjectsLoading, setAssignProjectsLoading] = useState(false);\n  const [provisioning, setProvisioning] = useState(false);\n  const [provisionError, setProvisionError] = useState<string | null>(null);"
+              )
+
+          if "const loadAssignProjects = async ()" not in s:
+              anchor = "  // Synchronize real-time telemetry from OfflineFieldInterface"
+              effect = '''  useEffect(() => {\n    if (!isAssignModalOpen) return;\n    let cancelled = false;\n    const loadAssignProjects = async () => {\n      setAssignProjectsLoading(true);\n      setProvisionError(null);\n      const { data, error } = await supabase\n        .from('projects')\n        .select('id,project_code,title')\n        .neq('status', 'archived')\n        .neq('status', 'completed')\n        .order('created_at', { ascending: false });\n      if (!cancelled) {\n        if (error) {\n          setAssignProjects([]);\n          setProvisionError(`Unable to load research projects: ${error.message}`);\n        } else {\n          setAssignProjects((data || []) as Array<{ id: string; project_code: string; title: string }>);\n          setNewProjectId((current) => current || data?.[0]?.id || '');\n        }\n        setAssignProjectsLoading(false);\n      }\n    };\n    loadAssignProjects();\n    return () => { cancelled = true; };\n  }, [isAssignModalOpen]);\n\n'''
+              s = s.replace(anchor, effect + anchor, 1)
+
+          pattern = re.compile(r"  const handleAssignSubmit = \(e: React\.FormEvent\) => \{.*?\n  \};\n\n  return \(", re.S)
+          replacement = '''  const handleAssignSubmit = async (e: React.FormEvent) => {\n    e.preventDefault();\n    setProvisionError(null);\n\n    if (!newName.trim() || !newEmail.trim() || !newProjectId) {\n      setProvisionError('Enumerator name, email, and research project are required.');\n      return;\n    }\n\n    setProvisioning(true);\n    try {\n      const { data: sessionData } = await supabase.auth.getSession();\n      const token = sessionData.session?.access_token;\n      if (!token) throw new Error('Authentication error: Please sign in again.');\n\n      const response = await fetch('/api/enumerators', {\n        method: 'POST',\n        headers: {\n          Authorization: `Bearer ${token}`,\n          'Content-Type': 'application/json',\n        },\n        body: JSON.stringify({\n          name: newName.trim(),\n          email: newEmail.trim().toLowerCase(),\n          phone: newPhone.trim(),\n          projectId: newProjectId,\n        }),\n      });\n\n      const payload = await response.json().catch(() => ({}));\n      if (!response.ok) throw new Error(payload.error || 'Unable to register enumerator.');\n\n      const defaultCoords = {\n        'North District': { latitude: 10.5105, longitude: 7.4165, lga: 'Kaduna North', state: 'Kaduna' },\n        'East District': { latitude: 6.4584, longitude: 7.5464, lga: 'Enugu North', state: 'Enugu' },\n        'South District': { latitude: 4.8156, longitude: 7.0498, lga: 'Port Harcourt', state: 'Rivers' },\n        'West District': { latitude: 7.3775, longitude: 3.9470, lga: 'Ibadan Central', state: 'Oyo' },\n        'Central Metro': { latitude: 9.0765, longitude: 7.3986, lga: 'Abuja Municipal', state: 'FCT Abuja' }\n      }[newRegion] || { latitude: 9.0765, longitude: 7.3986, lga: 'Central Sector', state: 'Federal' };\n\n      const newEnum: Enumerator = {\n        id: `EN-${1050 + enumerators.length + 1}`,\n        name: newName.trim(),\n        region: newRegion,\n        responses: 0,\n        status: 'Synced',\n        unsyncedCount: 0,\n        lastSync: 'Just now',\n        signalStrength: 'Good',\n        batteryLevel: 100,\n        phone: newPhone || '+1 (555) 999-0000',\n        assignedProjectIds: [newProjectId],\n        coordinates: {\n          latitude: defaultCoords.latitude,\n          longitude: defaultCoords.longitude,\n          accuracy: 3.5,\n          speed: 1.2,\n          timestamp: new Date().toISOString(),\n          address: `${newRegion} Field Zone`,\n          lga: defaultCoords.lga,\n          state: defaultCoords.state\n        },\n        locationHistory: [\n          {\n            latitude: defaultCoords.latitude,\n            longitude: defaultCoords.longitude,\n            timestamp: new Date().toISOString(),\n            address: 'Assigned Field Headquarters'\n          }\n        ]\n      };\n\n      const updated = [...enumerators, newEnum];\n      setEnumerators(updated);\n      saveStoredEnumerators(updated);\n      setSelectedEnumerator(newEnum);\n      setIsAssignModalOpen(false);\n      setNewName('');\n      setNewEmail('');\n      setNewPhone('');\n      setNewProjectId('');\n      setMessageToast(payload.message || `Enumerator ${newEnum.name} registered successfully.`);\n      setTimeout(() => setMessageToast(null), 4000);\n    } catch (error) {\n      setProvisionError(error instanceof Error ? error.message : 'Unable to register enumerator.');\n    } finally {\n      setProvisioning(false);\n    }\n  };\n\n  return ('''
+          if not pattern.search(s):
+              raise SystemExit('Could not locate handleAssignSubmit; no changes made.')
+          s = pattern.sub(replacement, s, count=1)
+
+          if 'name="enumerator-email"' not in s:
+              name_marker = '''              <div>\n                <label className="block font-semibold text-[#161c27] mb-1">Target District / Region</label>'''
+              email_field = '''              <div>\n                <label className="block font-semibold text-[#161c27] mb-1">Enumerator Email *</label>\n                <input\n                  id="enumerator-email"\n                  name="enumerator-email"\n                  type="email"\n                  required\n                  value={newEmail}\n                  onChange={(e) => setNewEmail(e.target.value)}\n                  placeholder="enumerator@example.com"\n                  className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none"\n                />\n              </div>\n\n'''
+              if name_marker not in s:
+                  raise SystemExit('Could not locate Assign Agent region field; no changes made.')
+              s = s.replace(name_marker, email_field + name_marker, 1)
+
+          if 'name="enumerator-project"' not in s:
+              region_marker = '''              <div>\n                <label className="block font-semibold text-[#161c27] mb-1">Target District / Region</label>'''
+              project_field = '''              <div>\n                <label className="block font-semibold text-[#161c27] mb-1">Research Project *</label>\n                <select\n                  id="enumerator-project"\n                  name="enumerator-project"\n                  required\n                  value={newProjectId}\n                  onChange={(e) => setNewProjectId(e.target.value)}\n                  disabled={assignProjectsLoading || provisioning}\n                  className="w-full p-2.5 rounded-lg border border-[#c4c6cf] focus:border-[#1a365d] outline-none bg-white"\n                >\n                  <option value="">{assignProjectsLoading ? 'Loading research projects...' : 'Select a research project'}</option>\n                  {assignProjects.map((project) => (\n                    <option key={project.id} value={project.id}>\n                      {project.project_code} — {project.title}\n                    </option>\n                  ))}\n                </select>\n              </div>\n\n'''
+              if region_marker not in s:
+                  raise SystemExit('Could not locate Assign Agent region field for project insertion; no changes made.')
+              s = s.replace(region_marker, project_field + region_marker, 1)
+
+          if '{provisionError &&' not in s:
+              error_marker = '''            <form onSubmit={handleAssignSubmit} className="space-y-4 text-xs">'''
+              error_block = '''            <form onSubmit={handleAssignSubmit} className="space-y-4 text-xs">\n              {provisionError && (\n                <div role="alert" className="p-3 rounded-lg bg-[#ba1a1a]/10 border border-[#ba1a1a]/20 text-[#8b1515] flex items-start gap-2">\n                  <span className="material-symbols-outlined text-[18px]">error</span>\n                  <span>{provisionError}</span>\n                </div>\n              )}'''
+              if error_marker not in s:
+                  raise SystemExit('Could not locate Assign Agent form; no changes made.')
+              s = s.replace(error_marker, error_block, 1)
 
           s = s.replace(
-              "import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';",
-              "import { EnumeratorMapVisualization } from './EnumeratorMapVisualization';\nimport { QuestionnaireAssignmentModal } from './QuestionnaireAssignmentModal';"
+              '''                <button\n                  type="button"\n                  onClick={() => setIsAssignModalOpen(false)}\n                  className="px-4 py-2 rounded-lg border border-[#c4c6cf] font-semibold text-[#002045]"\n                >''',
+              '''                <button\n                  type="button"\n                  disabled={provisioning}\n                  onClick={() => setIsAssignModalOpen(false)}\n                  className="px-4 py-2 rounded-lg border border-[#c4c6cf] font-semibold text-[#002045] disabled:opacity-50"\n                >''',
+              1
           )
           s = s.replace(
-              "  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);",
-              "  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);\n  const [isQuestionnaireAssignmentOpen, setIsQuestionnaireAssignmentOpen] = useState(false);"
+              '''                <button\n                  type="submit"\n                  className="px-5 py-2 rounded-lg bg-[#1a365d] text-white font-semibold hover:bg-[#002045]"\n                >\n                  Confirm Assignment\n                </button>''',
+              '''                <button\n                  type="submit"\n                  disabled={provisioning || assignProjectsLoading}\n                  className="px-5 py-2 rounded-lg bg-[#1a365d] text-white font-semibold hover:bg-[#002045] disabled:opacity-50 disabled:cursor-not-allowed"\n                >\n                  {provisioning ? 'Registering...' : 'Confirm Assignment'}\n                </button>''',
+              1
           )
-          old = '''          <button\n            onClick={() => setIsAssignModalOpen(true)}\n            className="bg-[#1a365d] hover:bg-[#002045] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">add</span>\n            <span>Assign Agent</span>\n          </button>'''
-          new = '''          <button\n            onClick={() => setIsQuestionnaireAssignmentOpen(true)}\n            className="bg-[#006a68] hover:bg-[#004f4e] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">assignment_turned_in</span>\n            <span>Assign Questionnaire</span>\n          </button>\n\n          <button\n            onClick={() => setIsAssignModalOpen(true)}\n            className="bg-[#1a365d] hover:bg-[#002045] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"\n          >\n            <span className="material-symbols-outlined text-[16px]">add</span>\n            <span>Assign Agent</span>\n          </button>'''
-          if old not in s:
-              raise SystemExit('Expected Assign Agent button was not found; no file changes made.')
-          s = s.replace(old, new, 1)
-          marker = '      {/* Assign Modal */}'
-          modal = '''      {/* Phase 8: Questionnaire Assignment */}\n      <QuestionnaireAssignmentModal\n        isOpen={isQuestionnaireAssignmentOpen}\n        onClose={() => setIsQuestionnaireAssignmentOpen(false)}\n      />\n\n'''
-          if marker not in s:
-              raise SystemExit('Expected modal insertion marker was not found; no file changes made.')
-          s = s.replace(marker, modal + marker, 1)
+
           p.write_text(s)
-          print('Phase 8 UI integrated into EnumeratorsView.tsx')
+          print('Assign Agent is now connected to secure database-backed enumerator provisioning.')
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
@@ -61,5 +125,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/components/EnumeratorsView.tsx
-          git commit -m "feat: integrate Phase 8 questionnaire assignment UI" || exit 0
+          git commit -m "fix: database-backed Assign Agent enumerator provisioning" || exit 0
           git push origin main
