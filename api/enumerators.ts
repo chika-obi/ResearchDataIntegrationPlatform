@@ -12,6 +12,11 @@ const json = (body: unknown, status = 200) =>
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 
+const generateTemporaryPassword = () => {
+  const token = crypto.randomUUID().replace(/-/g, '');
+  return `RDIP-${token.slice(0, 10)}a!`;
+};
+
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
@@ -83,14 +88,27 @@ export async function POST(request: Request) {
     if (usersError) return json({ error: usersError.message }, 500);
     const existingUser = (existingUsers?.users ?? []).find((u: { id: string; email?: string | null }) => (u.email || '').toLowerCase() === email);
     let enumeratorUserId: string;
+    const temporaryPassword = generateTemporaryPassword();
 
     if (existingUser) {
       enumeratorUserId = existingUser.id;
       if (enumeratorUserId === requesterId) return json({ error: 'The researcher account cannot also be registered as an enumerator.' }, 400);
+
+      const { error: passwordError } = await admin.auth.admin.updateUserById(enumeratorUserId, {
+        password: temporaryPassword,
+        email_confirm: true,
+        user_metadata: { full_name: name, role: 'enumerator' },
+      });
+      if (passwordError) return json({ error: `Enumerator login could not be configured: ${passwordError.message}` }, 500);
     } else {
-      const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, { data: { full_name: name, role: 'enumerator' } });
-      if (inviteError || !invited.user) return json({ error: inviteError?.message || 'Unable to create the enumerator account.' }, 500);
-      enumeratorUserId = invited.user.id;
+      const { data: created, error: createError } = await admin.auth.admin.createUser({
+        email,
+        password: temporaryPassword,
+        email_confirm: true,
+        user_metadata: { full_name: name, role: 'enumerator' },
+      });
+      if (createError || !created.user) return json({ error: createError?.message || 'Unable to create the enumerator account.' }, 500);
+      enumeratorUserId = created.user.id;
     }
 
     const { error: profileError } = await admin.from('profiles').upsert({
@@ -121,7 +139,10 @@ export async function POST(request: Request) {
       enumerator: { id: enumeratorUserId, email, full_name: name, phone: phone || null, role: 'enumerator', status: 'active' },
       projectId,
       invited: !existingUser,
-      message: existingUser ? 'Enumerator linked to the project.' : 'Enumerator account created and invitation sent.',
+      temporaryPassword,
+      message: existingUser
+        ? 'Enumerator linked to the project. A new temporary login password has been generated.'
+        : 'Enumerator account created with a temporary login password.',
     });
   } catch (error) {
     console.error('Enumerator provisioning error:', error);
