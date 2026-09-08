@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import { UserProfile, Question } from '../types';
 import { DEFAULT_QUESTIONS } from '../data/mockData';
+import { supabase } from '../lib/supabase';
 import { pushResponseToSupabase, getStoredResponses, saveResponseToLocalDb, saveSyncLog } from '../lib/supabaseSync';
 import { OfflineSurveyCollectorModal } from './OfflineSurveyCollectorModal';
 import { SyncStatusHistoryLog } from './SyncStatusHistoryLog';
@@ -21,6 +22,85 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [gpsEnabled, setGpsEnabled] = useState(true);
   const [audioEnabled, setAudioEnabled] = useState(false);
+
+  // Phase 8: authoritative questionnaire assignment for the authenticated enumerator.
+  const [assignedQuestionnaireId, setAssignedQuestionnaireId] = useState<string | null>(null);
+  const [assignedVersionId, setAssignedVersionId] = useState<string | null>(null);
+  const [assignedProjectId, setAssignedProjectId] = useState<string | null>(null);
+  const [assignmentLoadError, setAssignmentLoadError] = useState<string | null>(null);
+
+  const loadAssignedQuestionnaire = useCallback(async () => {
+    const userId = currentUser?.id;
+    if (!userId) return false;
+
+    try {
+      const { data: assignment, error: assignmentError } = await supabase
+        .from('questionnaire_assignments')
+        .select('id, questionnaire_id, questionnaire_version_id, enumerator_id, status, start_date, end_date')
+        .eq('enumerator_id', userId)
+        .eq('status', 'active')
+        .order('start_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (assignmentError) throw assignmentError;
+      if (!assignment) {
+        setAssignmentLoadError('No active questionnaire assignment was found for this enumerator.');
+        return false;
+      }
+
+      const { data: questionnaire, error: questionnaireError } = await supabase
+        .from('questionnaires')
+        .select('id, name, project_id, current_version_id')
+        .eq('id', assignment.questionnaire_id)
+        .maybeSingle();
+
+      if (questionnaireError) throw questionnaireError;
+      if (!questionnaire) throw new Error('Assigned questionnaire could not be found.');
+
+      const { data: version, error: versionError } = await supabase
+        .from('questionnaire_versions')
+        .select('id, questionnaire_id, version_number, status, schema_definition')
+        .eq('id', assignment.questionnaire_version_id)
+        .eq('questionnaire_id', assignment.questionnaire_id)
+        .eq('status', 'published')
+        .maybeSingle();
+
+      if (versionError) throw versionError;
+      if (!version) throw new Error('The assigned questionnaire version is not available or is not published.');
+
+      const schemaQuestions = version.schema_definition?.questions;
+      if (!Array.isArray(schemaQuestions) || schemaQuestions.length === 0) {
+        throw new Error('The assigned published questionnaire contains no questions.');
+      }
+
+      const normalizedQuestions = schemaQuestions.map((q: any, index: number) => ({
+        ...q,
+        number: q.number || `Q${index + 1}`
+      }));
+
+      setAssignedQuestionnaireId(assignment.questionnaire_id);
+      setAssignedVersionId(assignment.questionnaire_version_id);
+      setAssignedProjectId(questionnaire.project_id);
+      setSurveyTitle(questionnaire.name);
+      setSurveyVersion(`${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);
+      setActiveQuestions(normalizedQuestions);
+      setAssignmentLoadError(null);
+
+      localStorage.setItem('rdip_assignment_id', assignment.id);
+      localStorage.setItem('rdip_assigned_questionnaire_id', assignment.questionnaire_id);
+      localStorage.setItem('rdip_assigned_version_id', assignment.questionnaire_version_id);
+      localStorage.setItem('rdip_assigned_project_id', questionnaire.project_id || '');
+      localStorage.setItem('rdip_survey_title', questionnaire.name);
+      localStorage.setItem('rdip_survey_version', `${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);
+      localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalizedQuestions));
+      return true;
+    } catch (err: any) {
+      console.warn('[RDIP Phase 8] Assignment load failed:', err);
+      setAssignmentLoadError(err?.message || 'Unable to load assigned questionnaire.');
+      return false;
+    }
+  }, [currentUser?.id]);
 
   // Active survey details deployed by Researcher
   const [surveyTitle, setSurveyTitle] = useState(() => localStorage.getItem('rdip_survey_title') || 'Household Health & Demographics Survey 2024');
@@ -55,23 +135,18 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
   const pendingCount = responsesList.filter(r => r.status === 'Pending' || r.syncStatus === 'pending').length;
   const [syncedCount, setSyncedCount] = useState(132);
 
-  // Sync survey update from Researcher whenever component loads
+  // Phase 8: load the authenticated enumerator's active assignment from Supabase.
   useEffect(() => {
-    const checkUpdates = () => {
-      const title = localStorage.getItem('rdip_survey_title');
-      const version = localStorage.getItem('rdip_survey_version');
-      const qns = localStorage.getItem('rdip_active_questionnaire');
-      if (title) setSurveyTitle(title);
-      if (version) setSurveyVersion(version);
-      if (qns) {
-        try {
-          const parsed = JSON.parse(qns);
-          if (Array.isArray(parsed) && parsed.length > 0) setActiveQuestions(parsed);
-        } catch {}
-      }
-    };
-    checkUpdates();
-  }, []);
+    if (!currentUser?.id) return;
+    loadAssignedQuestionnaire();
+  }, [currentUser?.id, loadAssignedQuestionnaire]);
+
+  // Refresh the authoritative assignment whenever the simulated network comes online.
+  useEffect(() => {
+    if (!isOffline && currentUser?.id) {
+      loadAssignedQuestionnaire();
+    }
+  }, [isOffline, currentUser?.id, loadAssignedQuestionnaire]);
 
   // Handler for toggle network with logging
   const handleToggleNetwork = () => {
@@ -327,23 +402,12 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
     return () => clearInterval(interval);
   }, [isOffline, runBackgroundSyncPulse]);
 
-  const handleManualCheckUpdates = () => {
+  const handleManualCheckUpdates = async () => {
     const startTime = Date.now();
-    const qns = localStorage.getItem('rdip_active_questionnaire');
-    const title = localStorage.getItem('rdip_survey_title');
-    const version = localStorage.getItem('rdip_survey_version');
-    if (title) setSurveyTitle(title);
-    if (version) setSurveyVersion(version);
-    
-    let questionCount = activeQuestions.length;
-    if (qns) {
-      try {
-        const parsed = JSON.parse(qns);
-        if (Array.isArray(parsed)) {
-          setActiveQuestions(parsed);
-          questionCount = parsed.length;
-        }
-      } catch {}
+    const loaded = await loadAssignedQuestionnaire();
+    if (!loaded) {
+      alert(assignmentLoadError || 'No active assigned questionnaire could be loaded from Supabase.');
+      return;
     }
 
     saveSyncLog({
@@ -353,12 +417,12 @@ export const OfflineFieldInterface: React.FC<OfflineFieldInterfaceProps> = ({
       recordsSynced: 0,
       networkState: isOffline ? 'offline' : 'online',
       durationMs: Date.now() - startTime + 110,
-      summary: `Schema synchronization check (${version || 'v2.4.0'})`,
-      details: `Loaded questionnaire "${title || 'Active Survey'}" with ${questionCount} dynamic survey variables.`,
-      endpoint: 'Researcher Hub / Questionnaire API'
+      summary: `Assigned questionnaire synchronized (${surveyVersion})`,
+      details: `Loaded questionnaire "${surveyTitle}" with ${activeQuestions.length} questions for Enumerator ${enumeratorName}.`,
+      endpoint: 'Supabase / questionnaire_assignments → questionnaire_versions'
     });
 
-    alert(`Questionnaire schema is synchronized with Researcher Hub (${questionCount} questions).`);
+    alert(`Questionnaire schema synchronized for ${enumeratorName}: ${surveyTitle} (${activeQuestions.length} questions).`);
   };
 
   return (

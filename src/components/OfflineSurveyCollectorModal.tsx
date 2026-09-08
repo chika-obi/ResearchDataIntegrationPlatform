@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { Question, UserProfile } from '../types';
 import { DEFAULT_QUESTIONS } from '../data/mockData';
+import { supabase } from '../lib/supabase';
 import { pushResponseToSupabase, saveResponseToLocalDb } from '../lib/supabaseSync';
 import { evaluateQuestionLogic } from '../lib/surveyLogicEvaluator';
 import { GeolocationFieldRenderer } from './GeolocationFieldRenderer';
@@ -28,6 +29,11 @@ export const OfflineSurveyCollectorModal: React.FC<OfflineSurveyCollectorModalPr
   const [submittedRecordId, setSubmittedRecordId] = useState<string>('');
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // Phase 8: assignment metadata is authoritative in Supabase.
+  const [assignedQuestionnaireId, setAssignedQuestionnaireId] = useState<string | null>(null);
+  const [assignedProjectId, setAssignedProjectId] = useState<string | null>(null);
+  const [assignedVersionId, setAssignedVersionId] = useState<string | null>(null);
+
   // Load dynamically deployed questions from localStorage created by the Researcher
   const [questions, setQuestions] = useState<Question[]>(() => {
     const saved = localStorage.getItem('rdip_active_questionnaire');
@@ -46,22 +52,69 @@ export const OfflineSurveyCollectorModal: React.FC<OfflineSurveyCollectorModalPr
   const surveyVersion = localStorage.getItem('rdip_survey_version') || 'Version 2.4.0';
 
   useEffect(() => {
-    if (isOpen) {
-      const saved = localStorage.getItem('rdip_active_questionnaire');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setQuestions(parsed);
-          }
-        } catch {}
+    if (!isOpen) return;
+
+    setCurrentStepIndex(0);
+    setAnswers({});
+    setIsCompleted(false);
+    setValidationError(null);
+
+    const loadAssignedForm = async () => {
+      const userId = currentUser?.id;
+      if (!userId) return;
+
+      try {
+        const { data: assignment, error: assignmentError } = await supabase
+          .from('questionnaire_assignments')
+          .select('id, questionnaire_id, questionnaire_version_id, enumerator_id, status, start_date, end_date')
+          .eq('enumerator_id', userId)
+          .eq('status', 'active')
+          .order('start_date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (assignmentError) throw assignmentError;
+        if (!assignment) return;
+
+        const { data: questionnaire, error: questionnaireError } = await supabase
+          .from('questionnaires')
+          .select('id, name, project_id')
+          .eq('id', assignment.questionnaire_id)
+          .maybeSingle();
+        if (questionnaireError) throw questionnaireError;
+        if (!questionnaire) return;
+
+        const { data: version, error: versionError } = await supabase
+          .from('questionnaire_versions')
+          .select('id, questionnaire_id, version_number, status, schema_definition')
+          .eq('id', assignment.questionnaire_version_id)
+          .eq('questionnaire_id', assignment.questionnaire_id)
+          .eq('status', 'published')
+          .maybeSingle();
+        if (versionError) throw versionError;
+        if (!version) return;
+
+        const schemaQuestions = version.schema_definition?.questions;
+        if (!Array.isArray(schemaQuestions) || schemaQuestions.length === 0) return;
+
+        const normalized = schemaQuestions.map((q: any, index: number) => ({
+          ...q,
+          number: q.number || `Q${index + 1}`
+        }));
+
+        setAssignedQuestionnaireId(assignment.questionnaire_id);
+        setAssignedProjectId(questionnaire.project_id);
+        setAssignedVersionId(assignment.questionnaire_version_id);
+        setQuestions(normalized);
+        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));
+        localStorage.setItem('rdip_survey_title', questionnaire.name);
+        localStorage.setItem('rdip_survey_version', `${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);
+      } catch (err) {
+        console.warn('[RDIP Phase 8] Collector assignment load failed:', err);
       }
-      setCurrentStepIndex(0);
-      setAnswers({});
-      setIsCompleted(false);
-      setValidationError(null);
-    }
-  }, [isOpen]);
+    };
+
+    loadAssignedForm();
+  }, [isOpen, currentUser?.id]);
 
   if (!isOpen) return null;
 
@@ -150,8 +203,8 @@ export const OfflineSurveyCollectorModal: React.FC<OfflineSurveyCollectorModalPr
 
     const payload = {
       id: newRecordId,
-      questionnaireId: 'QNR-2024-001',
-      projectId: 'PRJ-001',
+      questionnaireId: assignedQuestionnaireId || localStorage.getItem('rdip_assigned_questionnaire_id') || 'QNR-2024-001',
+      projectId: assignedProjectId || localStorage.getItem('rdip_assigned_project_id') || 'PRJ-001',
       enumeratorId: enumeratorId,
       enumeratorName: enumeratorName,
       respondentId: `RESP-${Math.floor(1000 + Math.random() * 9000)}`,
