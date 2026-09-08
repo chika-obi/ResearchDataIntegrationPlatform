@@ -14,79 +14,114 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch field app to load assigned questionnaire from Supabase
-        shell: python
+      - name: Patch Phase 8 field app
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          field = Path('src/components/OfflineFieldInterface.tsx')
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              s = p.read_text()
+              if new in s:
+                  return s
+              if old not in s:
+                  raise SystemExit(f'Missing expected anchor: {label}')
+              return s.replace(old, new, 1)
+
+          field_path = 'src/components/OfflineFieldInterface.tsx'
+          field = Path(field_path)
           s = field.read_text()
 
-          old = "import { DEFAULT_QUESTIONS } from '../data/mockData';"
-          new = "import { DEFAULT_QUESTIONS } from '../data/mockData';\nimport { supabase } from '../lib/supabase';"
           if "import { supabase } from '../lib/supabase';" not in s:
-              s = s.replace(old, new, 1)
+              s = s.replace(
+                  "import { DEFAULT_QUESTIONS } from '../data/mockData';",
+                  "import { DEFAULT_QUESTIONS } from '../data/mockData';\nimport { supabase } from '../lib/supabase';",
+                  1,
+              )
 
           anchor = "  const [audioEnabled, setAudioEnabled] = useState(false);"
-          insertion = '''\n\n  // Phase 8: authoritative assignment loaded from Supabase for the authenticated enumerator.\n  const [assignedQuestionnaireId, setAssignedQuestionnaireId] = useState<string | null>(null);\n  const [assignedVersionId, setAssignedVersionId] = useState<string | null>(null);\n  const [assignedProjectId, setAssignedProjectId] = useState<string | null>(null);\n  const [assignmentLoadError, setAssignmentLoadError] = useState<string | null>(null);\n\n  const loadAssignedQuestionnaire = useCallback(async () => {\n    const userId = currentUser?.id;\n    if (!userId) return false;\n\n    try {\n      const { data: assignment, error: assignmentError } = await supabase\n        .from('questionnaire_assignments')\n        .select('id, questionnaire_id, questionnaire_version_id, enumerator_id, status, start_date, end_date')\n        .eq('enumerator_id', userId)\n        .eq('status', 'active')\n        .order('start_date', { ascending: false })\n        .limit(1)\n        .maybeSingle();\n\n      if (assignmentError) throw assignmentError;\n      if (!assignment) {\n        setAssignmentLoadError('No active questionnaire assignment was found for this enumerator.');\n        return false;\n      }\n\n      const { data: questionnaire, error: questionnaireError } = await supabase\n        .from('questionnaires')\n        .select('id, name, project_id, current_version_id')\n        .eq('id', assignment.questionnaire_id)\n        .maybeSingle();\n\n      if (questionnaireError) throw questionnaireError;\n      if (!questionnaire) throw new Error('Assigned questionnaire could not be found.');\n\n      const { data: version, error: versionError } = await supabase\n        .from('questionnaire_versions')\n        .select('id, questionnaire_id, version_number, status, schema_definition')\n        .eq('id', assignment.questionnaire_version_id)\n        .eq('questionnaire_id', assignment.questionnaire_id)\n        .eq('status', 'published')\n        .maybeSingle();\n\n      if (versionError) throw versionError;\n      if (!version) throw new Error('The assigned questionnaire version is not available or is not published.');\n\n      const schemaQuestions = version.schema_definition?.questions;\n      if (!Array.isArray(schemaQuestions) || schemaQuestions.length === 0) {\n        throw new Error('The assigned questionnaire version contains no questions in its published schema.');\n      }\n\n      const normalizedQuestions = schemaQuestions.map((q: any, index: number) => ({\n        ...q,\n        number: q.number || `Q${index + 1}`\n      }));\n\n      setAssignedQuestionnaireId(assignment.questionnaire_id);\n      setAssignedVersionId(assignment.questionnaire_version_id);\n      setAssignedProjectId(questionnaire.project_id);\n      setSurveyTitle(questionnaire.name);\n      setSurveyVersion(`${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);\n      setActiveQuestions(normalizedQuestions);\n      setAssignmentLoadError(null);\n\n      localStorage.setItem('rdip_assignment_id', assignment.id);\n      localStorage.setItem('rdip_assigned_questionnaire_id', assignment.questionnaire_id);\n      localStorage.setItem('rdip_assigned_version_id', assignment.questionnaire_version_id);\n      localStorage.setItem('rdip_assigned_project_id', questionnaire.project_id || '');\n      localStorage.setItem('rdip_survey_title', questionnaire.name);\n      localStorage.setItem('rdip_survey_version', `${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);\n      localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalizedQuestions));\n      return true;\n    } catch (err: any) {\n      console.warn('[RDIP Phase 8] Failed to load assigned questionnaire from Supabase:', err);\n      setAssignmentLoadError(err?.message || 'Unable to load assigned questionnaire.');\n      return false;\n    }\n  }, [currentUser?.id]);'''
+          block = r'''\n\n  // Phase 8: authoritative questionnaire assignment for the authenticated enumerator.\n  const [assignedQuestionnaireId, setAssignedQuestionnaireId] = useState<string | null>(null);\n  const [assignedVersionId, setAssignedVersionId] = useState<string | null>(null);\n  const [assignedProjectId, setAssignedProjectId] = useState<string | null>(null);\n  const [assignmentLoadError, setAssignmentLoadError] = useState<string | null>(null);\n\n  const loadAssignedQuestionnaire = useCallback(async () => {\n    const userId = currentUser?.id;\n    if (!userId) return false;\n\n    try {\n      const { data: assignment, error: assignmentError } = await supabase\n        .from('questionnaire_assignments')\n        .select('id, questionnaire_id, questionnaire_version_id, enumerator_id, status, start_date, end_date')\n        .eq('enumerator_id', userId)\n        .eq('status', 'active')\n        .order('start_date', { ascending: false })\n        .limit(1)\n        .maybeSingle();\n\n      if (assignmentError) throw assignmentError;\n      if (!assignment) {\n        setAssignmentLoadError('No active questionnaire assignment was found for this enumerator.');\n        return false;\n      }\n\n      const { data: questionnaire, error: questionnaireError } = await supabase\n        .from('questionnaires')\n        .select('id, name, project_id, current_version_id')\n        .eq('id', assignment.questionnaire_id)\n        .maybeSingle();\n\n      if (questionnaireError) throw questionnaireError;\n      if (!questionnaire) throw new Error('Assigned questionnaire could not be found.');\n\n      const { data: version, error: versionError } = await supabase\n        .from('questionnaire_versions')\n        .select('id, questionnaire_id, version_number, status, schema_definition')\n        .eq('id', assignment.questionnaire_version_id)\n        .eq('questionnaire_id', assignment.questionnaire_id)\n        .eq('status', 'published')\n        .maybeSingle();\n\n      if (versionError) throw versionError;\n      if (!version) throw new Error('The assigned questionnaire version is not available or is not published.');\n\n      const schemaQuestions = version.schema_definition?.questions;\n      if (!Array.isArray(schemaQuestions) || schemaQuestions.length === 0) {\n        throw new Error('The assigned published questionnaire contains no questions.');\n      }\n\n      const normalizedQuestions = schemaQuestions.map((q: any, index: number) => ({\n        ...q,\n        number: q.number || `Q${index + 1}`\n      }));\n\n      setAssignedQuestionnaireId(assignment.questionnaire_id);\n      setAssignedVersionId(assignment.questionnaire_version_id);\n      setAssignedProjectId(questionnaire.project_id);\n      setSurveyTitle(questionnaire.name);\n      setSurveyVersion(`${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);\n      setActiveQuestions(normalizedQuestions);\n      setAssignmentLoadError(null);\n\n      localStorage.setItem('rdip_assignment_id', assignment.id);\n      localStorage.setItem('rdip_assigned_questionnaire_id', assignment.questionnaire_id);\n      localStorage.setItem('rdip_assigned_version_id', assignment.questionnaire_version_id);\n      localStorage.setItem('rdip_assigned_project_id', questionnaire.project_id || '');\n      localStorage.setItem('rdip_survey_title', questionnaire.name);\n      localStorage.setItem('rdip_survey_version', `${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);\n      localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalizedQuestions));\n      return true;\n    } catch (err: any) {\n      console.warn('[RDIP Phase 8] Assignment load failed:', err);\n      setAssignmentLoadError(err?.message || 'Unable to load assigned questionnaire.');\n      return false;\n    }\n  }, [currentUser?.id]);'''
+          # Raw block above is converted to real newlines before insertion.
+          block = block.replace('\\n', '\n')
           if 'const [assignedQuestionnaireId' not in s:
-              s = s.replace(anchor, anchor + insertion, 1)
+              if anchor not in s:
+                  raise SystemExit('Missing audio state anchor')
+              s = s.replace(anchor, anchor + block, 1)
 
-          # Replace the old localStorage-only startup sync with authoritative DB loading.\n          pattern = re.compile(r"  // Sync survey update from Researcher whenever component loads\n  useEffect\(\(\) => \{.*?\n  \}, \[\]\);", re.S)
-          replacement = '''  // Phase 8: load the authenticated enumerator's active assignment from Supabase.\n  useEffect(() => {\n    if (!currentUser?.id) return;\n    loadAssignedQuestionnaire();\n  }, [currentUser?.id, loadAssignedQuestionnaire]);\n\n  // When the simulated network comes online, refresh the assignment from Supabase.\n  useEffect(() => {\n    if (!isOffline && currentUser?.id) {\n      loadAssignedQuestionnaire();\n    }\n  }, [isOffline, currentUser?.id, loadAssignedQuestionnaire]);'''
-          s, n = pattern.subn(replacement, s, count=1)
-          if n != 1:
-              raise SystemExit('Could not locate field-app localStorage sync block')
+          start = "  // Sync survey update from Researcher whenever component loads"
+          end = "  }, []);"
+          a = s.find(start)
+          if a == -1:
+              raise SystemExit('Missing old localStorage sync effect')
+          b = s.find(end, a)
+          if b == -1:
+              raise SystemExit('Missing end of old localStorage sync effect')
+          b += len(end)
+          replacement = '''  // Phase 8: load the authenticated enumerator's active assignment from Supabase.\n  useEffect(() => {\n    if (!currentUser?.id) return;\n    loadAssignedQuestionnaire();\n  }, [currentUser?.id, loadAssignedQuestionnaire]);\n\n  // Refresh the authoritative assignment whenever the simulated network comes online.\n  useEffect(() => {\n    if (!isOffline && currentUser?.id) {\n      loadAssignedQuestionnaire();\n    }\n  }, [isOffline, currentUser?.id, loadAssignedQuestionnaire]);'''
+          s = s[:a] + replacement + s[b:]
 
-          # Replace schema-pull handler so the button actually pulls the assigned DB version.\n          pattern = re.compile(r"  const handleManualCheckUpdates = \(\) => \{.*?\n  \};", re.S)
-          replacement = '''  const handleManualCheckUpdates = async () => {\n    const startTime = Date.now();\n    const loaded = await loadAssignedQuestionnaire();\n    if (!loaded) {\n      alert(assignmentLoadError || 'No active assigned questionnaire could be loaded from Supabase.');\n      return;\n    }\n\n    saveSyncLog({\n      type: 'schema_pull',\n      status: 'success',\n      recordsAttempted: 0,\n      recordsSynced: 0,\n      networkState: isOffline ? 'offline' : 'online',\n      durationMs: Date.now() - startTime + 110,\n      summary: `Assigned questionnaire synchronized (${surveyVersion})`,\n      details: `Loaded assigned questionnaire "${surveyTitle}" with ${activeQuestions.length} questions for Enumerator ${enumeratorName}.`,\n      endpoint: 'Supabase / questionnaire_assignments → questionnaire_versions'\n    });\n\n    alert(`Questionnaire schema synchronized for ${enumeratorName}: ${surveyTitle} (${activeQuestions.length} questions).`);\n  };'''
-          s, n = pattern.subn(replacement, s, count=1)
-          if n != 1:
-              raise SystemExit('Could not locate field-app schema pull handler')
+          start = '  const handleManualCheckUpdates = () => {'
+          a = s.find(start)
+          if a == -1:
+              raise SystemExit('Missing schema pull handler')
+          # Find the next handler closing marker before return().
+          b = s.find('\n\n  return (', a)
+          if b == -1:
+              raise SystemExit('Missing end of schema pull handler')
+          replacement = '''  const handleManualCheckUpdates = async () => {\n    const startTime = Date.now();\n    const loaded = await loadAssignedQuestionnaire();\n    if (!loaded) {\n      alert(assignmentLoadError || 'No active assigned questionnaire could be loaded from Supabase.');\n      return;\n    }\n\n    saveSyncLog({\n      type: 'schema_pull',\n      status: 'success',\n      recordsAttempted: 0,\n      recordsSynced: 0,\n      networkState: isOffline ? 'offline' : 'online',\n      durationMs: Date.now() - startTime + 110,\n      summary: `Assigned questionnaire synchronized (${surveyVersion})`,\n      details: `Loaded questionnaire "${surveyTitle}" with ${activeQuestions.length} questions for Enumerator ${enumeratorName}.`,\n      endpoint: 'Supabase / questionnaire_assignments → questionnaire_versions'\n    });\n\n    alert(`Questionnaire schema synchronized for ${enumeratorName}: ${surveyTitle} (${activeQuestions.length} questions).`);\n  };'''
+          s = s[:a] + replacement + s[b:]
 
           field.write_text(s)
 
-          modal = Path('src/components/OfflineSurveyCollectorModal.tsx')
+          modal_path = 'src/components/OfflineSurveyCollectorModal.tsx'
+          modal = Path(modal_path)
           m = modal.read_text()
-          old_import = "import { DEFAULT_QUESTIONS } from '../data/mockData';"
-          new_import = "import { DEFAULT_QUESTIONS } from '../data/mockData';\nimport { supabase } from '../lib/supabase';"
           if "import { supabase } from '../lib/supabase';" not in m:
-              m = m.replace(old_import, new_import, 1)
+              m = m.replace(
+                  "import { DEFAULT_QUESTIONS } from '../data/mockData';",
+                  "import { DEFAULT_QUESTIONS } from '../data/mockData';\nimport { supabase } from '../lib/supabase';",
+                  1,
+              )
 
           anchor = "  const [validationError, setValidationError] = useState<string | null>(null);"
-          insertion = '''\n\n  // Phase 8: assignment metadata is authoritative in Supabase.\n  const [assignedQuestionnaireId, setAssignedQuestionnaireId] = useState<string | null>(null);\n  const [assignedProjectId, setAssignedProjectId] = useState<string | null>(null);\n  const [assignedVersionId, setAssignedVersionId] = useState<string | null>(null);'''
+          block = r'''\n\n  // Phase 8: assignment metadata is authoritative in Supabase.\n  const [assignedQuestionnaireId, setAssignedQuestionnaireId] = useState<string | null>(null);\n  const [assignedProjectId, setAssignedProjectId] = useState<string | null>(null);\n  const [assignedVersionId, setAssignedVersionId] = useState<string | null>(null);'''.replace('\\n', '\n')
           if 'const [assignedQuestionnaireId' not in m:
-              m = m.replace(anchor, anchor + insertion, 1)
+              if anchor not in m:
+                  raise SystemExit('Missing collector validation anchor')
+              m = m.replace(anchor, anchor + block, 1)
 
-          pattern = re.compile(r"  useEffect\(\(\) => \{\n    if \(isOpen\) \{.*?\n  \}, \[isOpen\]\);", re.S)
-          replacement = '''  useEffect(() => {\n    if (!isOpen) return;\n\n    setCurrentStepIndex(0);\n    setAnswers({});\n    setIsCompleted(false);\n    setValidationError(null);\n\n    const loadAssignedForm = async () => {\n      const userId = currentUser?.id;\n      if (!userId) return;\n\n      try {\n        const { data: assignment, error: assignmentError } = await supabase\n          .from('questionnaire_assignments')\n          .select('id, questionnaire_id, questionnaire_version_id, enumerator_id, status')\n          .eq('enumerator_id', userId)\n          .eq('status', 'active')\n          .order('start_date', { ascending: false })\n          .limit(1)\n          .maybeSingle();\n\n        if (assignmentError) throw assignmentError;\n        if (!assignment) return;\n\n        const { data: questionnaire, error: questionnaireError } = await supabase\n          .from('questionnaires')\n          .select('id, name, project_id')\n          .eq('id', assignment.questionnaire_id)\n          .maybeSingle();\n        if (questionnaireError) throw questionnaireError;\n        if (!questionnaire) return;\n\n        const { data: version, error: versionError } = await supabase\n          .from('questionnaire_versions')\n          .select('id, questionnaire_id, version_number, status, schema_definition')\n          .eq('id', assignment.questionnaire_version_id)\n          .eq('questionnaire_id', assignment.questionnaire_id)\n          .eq('status', 'published')\n          .maybeSingle();\n        if (versionError) throw versionError;\n        if (!version) return;\n\n        const schemaQuestions = version.schema_definition?.questions;\n        if (!Array.isArray(schemaQuestions) || schemaQuestions.length === 0) return;\n\n        const normalized = schemaQuestions.map((q: any, index: number) => ({\n          ...q,\n          number: q.number || `Q${index + 1}`\n        }));\n\n        setAssignedQuestionnaireId(assignment.questionnaire_id);\n        setAssignedProjectId(questionnaire.project_id);\n        setAssignedVersionId(assignment.questionnaire_version_id);\n        setQuestions(normalized);\n        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));\n        localStorage.setItem('rdip_survey_title', questionnaire.name);\n        localStorage.setItem('rdip_survey_version', `${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);\n      } catch (err) {\n        console.warn('[RDIP Phase 8] Collector assignment load failed:', err);\n      }\n    };\n\n    loadAssignedForm();\n  }, [isOpen, currentUser?.id]);'''
-          m, n = pattern.subn(replacement, m, count=1)
-          if n != 1:
-              raise SystemExit('Could not locate collector open effect')
+          start = '  useEffect(() => {\n    if (isOpen) {'
+          a = m.find(start)
+          if a == -1:
+              raise SystemExit('Missing collector open effect')
+          b = m.find('\n  }, [isOpen]);', a)
+          if b == -1:
+              raise SystemExit('Missing collector open effect end')
+          b += len('\n  }, [isOpen]);')
+          replacement = '''  useEffect(() => {\n    if (!isOpen) return;\n\n    setCurrentStepIndex(0);\n    setAnswers({});\n    setIsCompleted(false);\n    setValidationError(null);\n\n    const loadAssignedForm = async () => {\n      const userId = currentUser?.id;\n      if (!userId) return;\n\n      try {\n        const { data: assignment, error: assignmentError } = await supabase\n          .from('questionnaire_assignments')\n          .select('id, questionnaire_id, questionnaire_version_id, enumerator_id, status, start_date, end_date')\n          .eq('enumerator_id', userId)\n          .eq('status', 'active')\n          .order('start_date', { ascending: false })\n          .limit(1)\n          .maybeSingle();\n        if (assignmentError) throw assignmentError;\n        if (!assignment) return;\n\n        const { data: questionnaire, error: questionnaireError } = await supabase\n          .from('questionnaires')\n          .select('id, name, project_id')\n          .eq('id', assignment.questionnaire_id)\n          .maybeSingle();\n        if (questionnaireError) throw questionnaireError;\n        if (!questionnaire) return;\n\n        const { data: version, error: versionError } = await supabase\n          .from('questionnaire_versions')\n          .select('id, questionnaire_id, version_number, status, schema_definition')\n          .eq('id', assignment.questionnaire_version_id)\n          .eq('questionnaire_id', assignment.questionnaire_id)\n          .eq('status', 'published')\n          .maybeSingle();\n        if (versionError) throw versionError;\n        if (!version) return;\n\n        const schemaQuestions = version.schema_definition?.questions;\n        if (!Array.isArray(schemaQuestions) || schemaQuestions.length === 0) return;\n\n        const normalized = schemaQuestions.map((q: any, index: number) => ({\n          ...q,\n          number: q.number || `Q${index + 1}`\n        }));\n\n        setAssignedQuestionnaireId(assignment.questionnaire_id);\n        setAssignedProjectId(questionnaire.project_id);\n        setAssignedVersionId(assignment.questionnaire_version_id);\n        setQuestions(normalized);\n        localStorage.setItem('rdip_active_questionnaire', JSON.stringify(normalized));\n        localStorage.setItem('rdip_survey_title', questionnaire.name);\n        localStorage.setItem('rdip_survey_version', `${version.version_number || 'v1.0'} (${String(version.status).toUpperCase()})`);\n      } catch (err) {\n        console.warn('[RDIP Phase 8] Collector assignment load failed:', err);\n      }\n    };\n\n    loadAssignedForm();\n  }, [isOpen, currentUser?.id]);'''
+          m = m[:a] + replacement + m[b:]
 
           m = m.replace("      questionnaireId: 'QNR-2024-001',", "      questionnaireId: assignedQuestionnaireId || localStorage.getItem('rdip_assigned_questionnaire_id') || 'QNR-2024-001',", 1)
           m = m.replace("      projectId: 'PRJ-001',", "      projectId: assignedProjectId || localStorage.getItem('rdip_assigned_project_id') || 'PRJ-001',", 1)
           modal.write_text(m)
 
-          print('Patched Phase 8 field app files successfully.')
+          print('Patch complete')
+          PY
 
-      - name: Commit Phase 8 field app patch
+      - name: Commit and push
         shell: bash
         run: |
           git config user.name "rdip-phase8-bot"
           git config user.email "actions@github.com"
           git add src/components/OfflineFieldInterface.tsx src/components/OfflineSurveyCollectorModal.tsx
-          if git diff --cached --quiet; then
-            echo "No changes needed."
-            exit 0
-          fi
+          git diff --cached --check
           git commit -m "fix: load Phase 8 assigned questionnaire from Supabase [skip ci]"
           git push origin HEAD:main
 
-      - name: Remove one-time patch workflow
+      - name: Remove one-time workflow
         shell: bash
         run: |
-          git rm -f .github/workflows/phase8-field-assignment-db-sync.yml || true
-          git commit -m "chore: remove one-time Phase 8 patch workflow [skip ci]" || true
-          git push origin HEAD:main || true
+          git rm -f .github/workflows/phase8-field-assignment-db-sync.yml
+          git commit -m "chore: remove one-time Phase 8 patch workflow [skip ci]"
+          git push origin HEAD:main
