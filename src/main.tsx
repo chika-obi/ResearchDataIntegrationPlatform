@@ -6,7 +6,11 @@ import { supabase } from './lib/supabase';
 import './index.css';
 
 function Root() {
-  const [passwordRecovery, setPasswordRecovery] = React.useState(false);
+  const [passwordRecovery, setPasswordRecovery] = React.useState(() => {
+    const hash = window.location.hash;
+    const query = new URLSearchParams(window.location.search);
+    return hash.includes('type=recovery') || query.get('type') === 'recovery';
+  });
 
   React.useEffect(() => {
     const handleAuthEvent = (event: string) => {
